@@ -266,10 +266,11 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!format) { return; }
 
-      const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-        ?? (vscode.window.activeTextEditor
-          ? path.dirname(vscode.window.activeTextEditor.document.fileName)
-          : '.');
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const activeEditorFolder = vscode.window.activeTextEditor
+        ? path.dirname(vscode.window.activeTextEditor.document.fileName)
+        : '.';
+      const folder = workspaceFolder ?? activeEditorFolder;
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const reportsDir = path.join(folder, 'compliance-reports');
       if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }

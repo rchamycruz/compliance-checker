@@ -31,17 +31,17 @@
     "commands": [
       {
         "command": "syntaxis.checkFile",
-        "title": "Syntaxis: Revisar archivo actual",
+        "title": "Revisar archivo actual",
         "category": "Syntaxis"
       },
       {
         "command": "syntaxis.checkWorkspace",
-        "title": "Syntaxis: Revisar workspace completo",
+        "title": "Revisar workspace completo",
         "category": "Syntaxis"
       },
       {
         "command": "syntaxis.generateReport",
-        "title": "Syntaxis: Generar reporte",
+        "title": "Generar reporte",
         "category": "Syntaxis"
       }
     ]
