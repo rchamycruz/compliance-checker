@@ -390,6 +390,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }
       const generatedBy = getGeneratedBy();
 
+      let savedPathsOuter: string[] = [];
+
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: false },
         async (progress) => {
@@ -496,23 +498,27 @@ export function activate(context: vscode.ExtensionContext): void {
             savedPaths.push(p);
           }
 
-          // ── Notificar y ofrecer abrir ──────────────────────────────────────
-          const fileNames = savedPaths.map(p => path.basename(p)).join(', ');
-          const action = await vscode.window.showInformationMessage(
-            `📊 Reporte${savedPaths.length > 1 ? 's' : ''} generado${savedPaths.length > 1 ? 's' : ''}: ${fileNames}`,
-            'Abrir HTML', 'Abrir JSON', 'Abrir carpeta'
-          );
-          if (action === 'Abrir HTML') {
-            const htmlPath = savedPaths.find(p => p.endsWith('.html'));
-            if (htmlPath) { vscode.env.openExternal(vscode.Uri.file(htmlPath)); }
-          } else if (action === 'Abrir JSON') {
-            const jsonPath = savedPaths.find(p => p.endsWith('.json'));
-            if (jsonPath) { vscode.window.showTextDocument(await vscode.workspace.openTextDocument(jsonPath)); }
-          } else if (action === 'Abrir carpeta') {
-            vscode.env.openExternal(vscode.Uri.file(reportsDir));
-          }
+          savedPathsOuter = savedPaths;
         }
       );
+
+      // ── Notificar y ofrecer abrir (fuera del withProgress para que se cierre) ──
+      if (savedPathsOuter.length) {
+        const fileNames = savedPathsOuter.map(p => path.basename(p)).join(', ');
+        const action = await vscode.window.showInformationMessage(
+          `📊 Reporte${savedPathsOuter.length > 1 ? 's' : ''} generado${savedPathsOuter.length > 1 ? 's' : ''}: ${fileNames}`,
+          'Abrir HTML', 'Abrir JSON', 'Abrir carpeta'
+        );
+        if (action === 'Abrir HTML') {
+          const htmlPath = savedPathsOuter.find(p => p.endsWith('.html'));
+          if (htmlPath) { vscode.env.openExternal(vscode.Uri.file(htmlPath)); }
+        } else if (action === 'Abrir JSON') {
+          const jsonPath = savedPathsOuter.find(p => p.endsWith('.json'));
+          if (jsonPath) { vscode.window.showTextDocument(await vscode.workspace.openTextDocument(jsonPath)); }
+        } else if (action === 'Abrir carpeta') {
+          vscode.env.openExternal(vscode.Uri.file(reportsDir));
+        }
+      }
     })
   );
 
