@@ -239,7 +239,21 @@ interface Report {
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
 }
 
-// ─── Identificación del usuario que genera el reporte ─────────────────────────
+// ─── Fecha/hora local del sistema (no UTC) ────────────────────────────────────
+function localISOString(date = new Date()): string {
+  // Ajusta por el offset local para obtener la hora del sistema
+  const offset = date.getTimezoneOffset(); // minutos detrás de UTC (negativo en zonas +)
+  const local = new Date(date.getTime() - offset * 60_000);
+  // Formato: 2026-05-25T18:34:16-04:00
+  const base = local.toISOString().replace('Z', '');
+  const sign = offset <= 0 ? '+' : '-';
+  const absOffset = Math.abs(offset);
+  const hh = String(Math.floor(absOffset / 60)).padStart(2, '0');
+  const mm = String(absOffset % 60).padStart(2, '0');
+  return `${base}${sign}${hh}:${mm}`;
+}
+
+
 function getGeneratedBy(): string {
   try {
     const gitName = require('child_process')
@@ -459,7 +473,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
   const SEVERITY_ORDER: Record<Severity, number> = { 'CRÍTICA': 0, 'ALTA': 1, 'MEDIA': 2, 'BAJA': 3 };
 
   return {
-    projectName: filePath, analyzedAt: new Date().toISOString(),
+    projectName: filePath, analyzedAt: localISOString(),
     totalExecutionMs: Date.now()-t0, filesAnalyzed: [filePath],
     overallStatus: st, overallScore: score,
     totalFindings: findings.length, criticalFindings: crit, highFindings: high,
@@ -647,7 +661,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const now = new Date();
-      const ts = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+      const ts = localISOString(now).replace(/[:.+]/g, '-').replace('T', '_').slice(0, 19);
       const reportsDir = path.join(folder, 'compliance-reports');
       if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }
       const generatedBy = getGeneratedBy();
@@ -724,7 +738,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const wsScore = Math.max(0, 100 - wsCritPenalty - wsHighPenalty - wsMediaPenalty - wsBajaPenalty);
             consolidatedReport = {
               projectName: folder,
-              analyzedAt: new Date().toISOString(),
+              analyzedAt: localISOString(),
               totalExecutionMs: 0,
               filesAnalyzed: allFiles,
               overallStatus: ws,
