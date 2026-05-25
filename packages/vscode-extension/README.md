@@ -2,7 +2,7 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.6.0-blue)](https://github.com/rchamycruz/compliance-checker)
+[![Version](https://img.shields.io/badge/versión-0.7.0-blue)](https://github.com/rchamycruz/compliance-checker)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.60.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
@@ -189,6 +189,11 @@ code .
 ---
 
 ## Changelog
+
+### v0.7.0
+- ✅ Prompts sugeridos por hallazgo: copia y pega en GitHub Copilot, ChatGPT o cualquier IA para corregir el issue
+- ✅ Tooltip "¿Cómo se calcula el Score?" en la tarjeta del score
+- ✅ Clic en tarjetas de severidad navega a la sección correspondiente
 
 ### v0.6.0
 - ✅ Logo de Syntaxis embebido en el reporte HTML (header + footer)

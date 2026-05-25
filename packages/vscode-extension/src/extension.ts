@@ -536,7 +536,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   } catch { /* logo opcional */ }
 
-  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.6.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.7.0 — Ley 21.719 + Ley 21.663');
 
   // Debounce diagnósticos (800ms)
   let timer: NodeJS.Timeout | undefined;
@@ -894,7 +894,8 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     const citationBlock = f.citation
       ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n\n**❓ ¿Por qué debería implementar esta corrección?**\n\n${f.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
-    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}`;
+    const promptBlock = `<details><summary>🤖 Prompt sugerido para corregir con IA</summary>\n\n\`\`\`\n${buildSuggestedPrompt(f)}\n\`\`\`\n</details>`;
+    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}\n${promptBlock}`;
   }).join('\n');
 
   const passingRows = report.passingChecks.map(p => {
@@ -932,6 +933,27 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
       ? `| Control | Ubicación | Descripción | Artículo |\n|---|---|---|---|\n${passingRows}\n`
       : `_No se detectaron controles de cumplimiento en este análisis._\n`) +
     `\n---\n> **Ley 21.719** (Protección de Datos Personales — vigente diciembre 2026) · **Ley 21.663** (Marco de Ciberseguridad) · Syntaxis Compliance Checker\n`;
+}
+
+// ─── Genera prompt sugerido para corregir un hallazgo con IA ─────────────────
+function buildSuggestedPrompt(f: Finding): string {
+  const loc = f.file ? `${f.file}${f.lineNumber ? `:${f.lineNumber}` : ''}` : 'archivo desconocido';
+  const snippet = f.codeSnippet ? `\n\nCódigo problemático detectado:\n\`\`\`\n${f.codeSnippet}\n\`\`\`` : '';
+  return `Tengo el siguiente problema de cumplimiento legal en mi código y necesito que me ayudes a corregirlo:
+
+📁 Archivo: ${loc}
+🔴 Severidad: ${f.severity}
+⚠️ Tipo: ${f.type}
+📜 Ley: ${f.law}
+📋 Artículo: ${f.article ?? 'N/A'}
+📝 Descripción: ${f.description}${snippet}
+
+✅ Recomendación: ${f.recommendation}
+${f.citation?.whyFix ? `\n💡 Contexto legal: ${f.citation.whyFix}` : ''}
+Por favor:
+1. Muéstrame el código corregido completo para este archivo/función.
+2. Explica brevemente qué cambios hiciste y por qué son necesarios para cumplir con ${f.law}.
+3. Si hay patrones similares que debería revisar en el resto del código, indícamelos.`;
 }
 
 // ─── Exportar generateHtml inline (no requiere importar src/) ────────────────
@@ -982,6 +1004,22 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
           </details>
         </td>
       </tr>` : '';
+    const prompt = buildSuggestedPrompt(f);
+    const promptHtml = `
+      <tr style="background:${bg}">
+        <td colspan="7" style="padding:.3rem .6rem .9rem 2rem;border-top:none">
+          <details style="cursor:pointer">
+            <summary style="color:#0891b2;font-size:.8rem;font-weight:600;user-select:none">🤖 Prompt sugerido para corregir con IA</summary>
+            <div style="margin-top:.6rem">
+              <pre id="prompt-${f.id}" style="background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:6px;font-size:.76rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(prompt)}</pre>
+              <button onclick="(function(btn){var pre=document.getElementById('prompt-${f.id}');navigator.clipboard.writeText(pre.textContent).then(function(){var t=btn.textContent;btn.textContent='✅ ¡Copiado!';btn.style.background='#16a34a';setTimeout(function(){btn.textContent=t;btn.style.background='';},2000);})})(this)"
+                style="margin-top:.5rem;padding:.35rem .9rem;background:#0891b2;color:#fff;border:none;border-radius:5px;font-size:.78rem;font-weight:600;cursor:pointer">
+                📋 Copiar prompt
+              </button>
+            </div>
+          </details>
+        </td>
+      </tr>`;
     return `${anchorRow}<tr style="background:${bg}">
       <td style="text-align:center">${icon}</td>
       <td><b style="color:${col}">${f.severity}</b></td>
@@ -990,7 +1028,7 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
       <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
       <td style="font-size:.82em">${esc(f.recommendation.substring(0,80))}</td>
       <td style="text-align:center">${f.estimatedFixHours??'—'}h</td>
-    </tr>${citationHtml}`;
+    </tr>${citationHtml}${promptHtml}`;
   }).join('');
 
   const passingRows = report.passingChecks.map(p => {
