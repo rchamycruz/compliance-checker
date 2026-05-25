@@ -233,6 +233,7 @@ interface Report {
   projectName: string; analyzedAt: string; totalExecutionMs: number;
   filesAnalyzed: string[]; overallStatus: Status; overallScore: number;
   totalFindings: number; criticalFindings: number; highFindings: number;
+  mediumFindings: number; lowFindings: number;
   blockMerge: boolean; recommendations: string[]; generatedBy: string;
   passingChecks: PassingCheck[];
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
@@ -367,10 +368,19 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     }
   });
 
-  const crit = findings.filter(f=>f.severity==='CRÍTICA').length;
-  const high = findings.filter(f=>f.severity==='ALTA').length;
+  const crit  = findings.filter(f=>f.severity==='CRÍTICA').length;
+  const high  = findings.filter(f=>f.severity==='ALTA').length;
+  const media = findings.filter(f=>f.severity==='MEDIA').length;
+  const baja  = findings.filter(f=>f.severity==='BAJA').length;
   const st: Status = crit>0 ? 'FAIL' : high>0 ? 'WARN' : 'PASS';
-  const score = Math.max(0, 100 - crit*25 - high*10);
+  // Fórmula ponderada con caps por tier:
+  // CRÍTICA pesa 4x, ALTA pesa 2x, MEDIA 1x, BAJA 0.5x
+  // Cada tier tiene un techo para que el score no colapse a 0 con pocos hallazgos
+  const critPenalty  = Math.min(crit  * 20, 60);   // 1→20, 2→40, 3+→60
+  const highPenalty  = Math.min(high  *  8, 20);   // 1→8,  2→16, 3+→20
+  const mediaPenalty = Math.min(media *  4, 10);   // 1→4,  2→8,  3+→10
+  const bajaPenalty  = Math.min(baja  *  2,  5);   // 1→2,  2→4,  3+→5
+  const score = Math.max(0, 100 - critPenalty - highPenalty - mediaPenalty - bajaPenalty);
 
   // ── Detección de controles que SÍ cumplen ─────────────────────────────────
   const passingChecks: PassingCheck[] = [];
@@ -453,6 +463,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     totalExecutionMs: Date.now()-t0, filesAnalyzed: [filePath],
     overallStatus: st, overallScore: score,
     totalFindings: findings.length, criticalFindings: crit, highFindings: high,
+    mediumFindings: media, lowFindings: baja,
     blockMerge: crit>0,
     recommendations: [...new Map(findings.map(f=>[f.type,f.recommendation])).values()].slice(0,5),
     generatedBy: opts?.generatedBy ?? '',
@@ -677,7 +688,7 @@ export function activate(context: vscode.ExtensionContext): void {
               }
             }
 
-            let totalCrit = 0, totalHigh = 0, totalFinds = 0;
+            let totalCrit = 0, totalHigh = 0, totalMedia = 0, totalBaja = 0, totalFinds = 0;
             const allAgentReports: Report['agentReports'] = [];
             const allPassingChecks: PassingCheck[] = [];
             const allFiles: string[] = [];
@@ -689,6 +700,8 @@ export function activate(context: vscode.ExtensionContext): void {
                 const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
                 totalCrit  += r.criticalFindings;
                 totalHigh  += r.highFindings;
+                totalMedia += r.agentReports.flatMap(a=>a.findings).filter(f=>f.severity==='MEDIA').length;
+                totalBaja  += r.agentReports.flatMap(a=>a.findings).filter(f=>f.severity==='BAJA').length;
                 totalFinds += r.totalFindings;
                 allFiles.push(files[i].fsPath);
                 allPassingChecks.push(...r.passingChecks);
@@ -704,16 +717,23 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             const ws: Status = totalCrit > 0 ? 'FAIL' : totalHigh > 0 ? 'WARN' : 'PASS';
+            const wsCritPenalty  = Math.min(totalCrit  * 20, 60);
+            const wsHighPenalty  = Math.min(totalHigh  *  8, 20);
+            const wsMediaPenalty = Math.min(totalMedia *  4, 10);
+            const wsBajaPenalty  = Math.min(totalBaja  *  2,  5);
+            const wsScore = Math.max(0, 100 - wsCritPenalty - wsHighPenalty - wsMediaPenalty - wsBajaPenalty);
             consolidatedReport = {
               projectName: folder,
               analyzedAt: new Date().toISOString(),
               totalExecutionMs: 0,
               filesAnalyzed: allFiles,
               overallStatus: ws,
-              overallScore: Math.max(0, 100 - totalCrit * 25 - totalHigh * 10),
+              overallScore: wsScore,
               totalFindings: totalFinds,
               criticalFindings: totalCrit,
               highFindings: totalHigh,
+              mediumFindings: totalMedia,
+              lowFindings: totalBaja,
               blockMerge: totalCrit > 0,
               recommendations: [],
               generatedBy,
@@ -796,7 +816,7 @@ function printReport(report: Report): void {
   out.appendLine('═══════════════════════════════════════════════════');
   out.appendLine(`  Archivo : ${path.basename(report.projectName)}`);
   out.appendLine(`  Estado  : ${report.overallStatus}   Score: ${report.overallScore}/100`);
-  out.appendLine(`  CRÍTICA : ${report.criticalFindings}   ALTA: ${report.highFindings}   Total: ${report.totalFindings}`);
+  out.appendLine(`  🔴 CRÍTICA: ${report.criticalFindings}  🟠 ALTA: ${report.highFindings}  🟡 MEDIA: ${report.mediumFindings??0}  🔵 BAJA: ${report.lowFindings??0}  Total: ${report.totalFindings}`);
   out.appendLine('───────────────────────────────────────────────────');
   for (const ar of report.agentReports) {
     if (!ar.findings.length) { continue; }
@@ -858,9 +878,11 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}` +
     (report.generatedBy ? `  **Generado por:** ${report.generatedBy}` : '') + `\n\n---\n\n` +
     `| Métrica | Valor |\n|---|---|\n` +
-    `| Score | ${report.overallScore}/100 |\n` +
+    `| Score | **${report.overallScore}/100** |\n` +
     `| 🔴 CRÍTICA | ${report.criticalFindings} |\n` +
     `| 🟠 ALTA | ${report.highFindings} |\n` +
+    `| 🟡 MEDIA | ${report.mediumFindings??0} |\n` +
+    `| 🔵 BAJA | ${report.lowFindings??0} |\n` +
     `| Total hallazgos | ${report.totalFindings} |\n` +
     `| ✅ Controles OK | ${report.passingChecks.length} |\n` +
     `| Horas fix | ~${totalHours}h |\n\n` +
@@ -972,11 +994,12 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
   <span class="badge">${statusLabel}</span>
 </div>
 <div class="cards">
-  <div class="card"><div class="v">${report.overallScore}</div><div class="l">Score /100</div></div>
-  <div class="card"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">CRÍTICA</div></div>
-  <div class="card"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">ALTA</div></div>
-  <div class="card"><div class="v">${report.totalFindings}</div><div class="l">Hallazgos</div></div>
-  <div class="card"><div class="v" style="color:#16a34a">${report.passingChecks.length}</div><div class="l">Controles OK</div></div>
+  <div class="card"><div class="v" style="color:${report.overallScore>=70?'#16a34a':report.overallScore>=40?'#ea580c':'#dc2626'}">${report.overallScore}</div><div class="l">Score /100</div></div>
+  <div class="card"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">🔴 CRÍTICA</div></div>
+  <div class="card"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">🟠 ALTA</div></div>
+  <div class="card"><div class="v" style="color:#ca8a04">${report.mediumFindings??0}</div><div class="l">🟡 MEDIA</div></div>
+  <div class="card"><div class="v" style="color:#2563eb">${report.lowFindings??0}</div><div class="l">🔵 BAJA</div></div>
+  <div class="card"><div class="v" style="color:#16a34a">${report.passingChecks.length}</div><div class="l">✅ Controles OK</div></div>
   <div class="card"><div class="v">${totalHours}</div><div class="l">Horas fix</div></div>
 </div>
 <h2>📊 Hallazgos detallados</h2>
