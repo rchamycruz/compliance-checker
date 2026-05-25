@@ -536,7 +536,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   } catch { /* logo opcional */ }
 
-  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.5.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.6.0 — Ley 21.719 + Ley 21.663');
 
   // Debounce diagnósticos (800ms)
   let timer: NodeJS.Timeout | undefined;
