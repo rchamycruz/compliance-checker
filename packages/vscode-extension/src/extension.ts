@@ -871,7 +871,13 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
   const sorted = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
 
   const rows = sorted.map(f => {
-    const loc = f.lineNumber ? `\`${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}\`` : '—';
+    const fileName = f.file?.split(/[\\/]/).pop() ?? '?';
+    const vscodePath = f.file && f.lineNumber
+      ? `vscode://file/${f.file.replace(/\\/g,'/')}:${f.lineNumber}:1`
+      : null;
+    const loc = f.lineNumber
+      ? (vscodePath ? `[${fileName}:${f.lineNumber}](${vscodePath})` : `\`${fileName}:${f.lineNumber}\``)
+      : '—';
     const desc = f.description.replace(/\|/g,'\\|').slice(0,80);
     const rec  = f.recommendation.replace(/\|/g,'\\|').slice(0,70);
     const citationBlock = f.citation
@@ -881,7 +887,13 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
   }).join('\n');
 
   const passingRows = report.passingChecks.map(p => {
-    const loc = p.lineNumber ? `\`${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}\`` : '—';
+    const pFileName = p.file?.split(/[\\/]/).pop() ?? '?';
+    const pVscodePath = p.file && p.lineNumber
+      ? `vscode://file/${p.file.replace(/\\/g,'/')}:${p.lineNumber}:1`
+      : null;
+    const loc = p.lineNumber
+      ? (pVscodePath ? `[${pFileName}:${p.lineNumber}](${pVscodePath})` : `\`${pFileName}:${p.lineNumber}\``)
+      : '—';
     const citationBlock = p.citation
       ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${p.citation.law}**  \n**${p.citation.article}** — *${p.citation.title}*\n\n> ${p.citation.text.replace(/\n/g,'\n> ')}\n\n${p.citation.url ? `[📖 Texto completo en BCN](${p.citation.url})` : ''}\n\n**❓ ¿Por qué es importante mantener este control?**\n\n${p.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
@@ -926,7 +938,15 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
     const icon = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
     const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
     const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
-    const loc  = f.lineNumber ? `${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}` : '—';
+    const fileName = f.file?.split(/[\\/]/).pop() ?? '?';
+    const vscodePath = f.file && f.lineNumber
+      ? `vscode://file/${f.file.replace(/\\/g,'/')}:${f.lineNumber}:1`
+      : null;
+    const loc = f.lineNumber
+      ? (vscodePath
+          ? `<a href="${vscodePath}" title="${esc(f.file??'')}:${f.lineNumber}" style="color:#4f46e5;font-family:monospace;font-size:.82em">${esc(fileName)}:${f.lineNumber}</a>`
+          : `<code>${esc(fileName)}:${f.lineNumber}</code>`)
+      : '—';
     const citationHtml = f.citation ? `
       <tr style="background:${bg}">
         <td colspan="7" style="padding:.4rem .6rem 1rem 2rem;border-top:none">
@@ -948,7 +968,7 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
     return `<tr style="background:${bg}">
       <td style="text-align:center">${icon}</td>
       <td><b style="color:${col}">${f.severity}</b></td>
-      <td><code>${esc(loc)}</code></td>
+      <td>${loc}</td>
       <td>${esc(f.description.substring(0,90))}</td>
       <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
       <td style="font-size:.82em">${esc(f.recommendation.substring(0,80))}</td>
@@ -957,7 +977,15 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
   }).join('');
 
   const passingRows = report.passingChecks.map(p => {
-    const loc = p.lineNumber ? `${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}` : '—';
+    const pFileName = p.file?.split(/[\\/]/).pop() ?? '?';
+    const pVscodePath = p.file && p.lineNumber
+      ? `vscode://file/${p.file.replace(/\\/g,'/')}:${p.lineNumber}:1`
+      : null;
+    const loc = p.lineNumber
+      ? (pVscodePath
+          ? `<a href="${pVscodePath}" title="${esc(p.file??'')}:${p.lineNumber}" style="color:#16a34a;font-family:monospace;font-size:.82em">${esc(pFileName)}:${p.lineNumber}</a>`
+          : `<code>${esc(pFileName)}:${p.lineNumber}</code>`)
+      : '—';
     const citationHtml = p.citation ? `
       <tr>
         <td colspan="6" style="padding:.4rem .6rem 1rem 2rem;border-top:none">
@@ -979,7 +1007,7 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
     return `<tr>
       <td style="text-align:center">✅</td>
       <td style="color:#16a34a;font-weight:600">${esc(p.type.replace(/_/g,' '))}</td>
-      <td><code>${esc(loc)}</code></td>
+      <td>${loc}</td>
       <td>${esc(p.description)}</td>
       <td style="color:#64748b;font-size:.82em">${esc(p.article??p.law)}</td>
       <td style="font-size:.82em;color:#475569">${esc(p.evidence.substring(0,80))}</td>
