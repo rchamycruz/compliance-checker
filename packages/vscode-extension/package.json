@@ -1,0 +1,60 @@
+{
+  "name": "syntaxis-compliance-checker",
+  "displayName": "Syntaxis Compliance Checker",
+  "version": "0.1.0",
+  "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real",
+  "author": "Syntaxis SPA",
+  "license": "MIT",
+  "publisher": "syntaxis",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:csharp",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onCommand:syntaxis.checkFile",
+    "onCommand:syntaxis.checkWorkspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "syntaxis.checkFile",
+        "title": "Syntaxis: Revisar archivo actual",
+        "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.checkWorkspace",
+        "title": "Syntaxis: Revisar workspace completo",
+        "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.generateReport",
+        "title": "Syntaxis: Generar reporte",
+        "category": "Syntaxis"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.60.0",
+    "@types/node": "^20.0.0",
+    "@types/mocha": "^10.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "pino": "^8.16.1"
+  }
+}

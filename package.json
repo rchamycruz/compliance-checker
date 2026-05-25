@@ -1,0 +1,45 @@
+{
+  "name": "compliance-checker",
+  "version": "0.1.0",
+  "description": "Agente para cumplimiento Ley 21.719 y 21.663 en Chile",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "compile": "tsc",
+    "start": "node dist/index.js"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "keywords": [
+    "compliance",
+    "data-protection",
+    "cybersecurity",
+    "chile",
+    "ley-21-719",
+    "ley-21-663"
+  ],
+  "author": "Rodrigo Chamy",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0",
+    "prettier": "^3.0.0",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "pino": "^8.16.1"
+  }
+}
