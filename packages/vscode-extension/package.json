@@ -48,7 +48,8 @@
   },
   "files": [
     "out/**",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "compile": "tsc -p ./",
