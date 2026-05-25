@@ -228,18 +228,134 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Comando: Generar reporte JSON
+  // Comando: Generar reporte (JSON + HTML + Markdown)
   context.subscriptions.push(
     vscode.commands.registerCommand('syntaxis.generateReport', async () => {
-      const ed = vscode.window.activeTextEditor;
-      if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
-      const report = analyzeCode(ed.document.getText(), ed.document.fileName);
-      const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(ed.document.fileName);
-      const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
-      const p = path.join(folder, `compliance-report-${ts}.json`);
-      fs.writeFileSync(p, JSON.stringify(report,null,2), 'utf8');
-      const action = await vscode.window.showInformationMessage(`📊 Reporte guardado: compliance-report-${ts}.json`, 'Abrir');
-      if (action==='Abrir') { vscode.window.showTextDocument(await vscode.workspace.openTextDocument(p)); }
+      // 1. ¿Scope: archivo actual o workspace completo?
+      const choice = await vscode.window.showQuickPick(
+        ['📄 Archivo actual', '📂 Workspace completo'],
+        { placeHolder: '¿Qué deseas analizar?' }
+      );
+      if (!choice) { return; }
+
+      const format = await vscode.window.showQuickPick(
+        ['JSON', 'HTML', 'Markdown', 'Todos (JSON + HTML + MD)'],
+        { placeHolder: '¿Formato del reporte?' }
+      );
+      if (!format) { return; }
+
+      const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+        ?? vscode.window.activeTextEditor
+          ? path.dirname(vscode.window.activeTextEditor!.document.fileName)
+          : '.';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const reportsDir = path.join(folder, 'compliance-reports');
+      if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: false },
+        async (progress) => {
+          let consolidatedReport: Report | undefined;
+
+          // ── Recopilar datos ────────────────────────────────────────────────
+          if (choice === '📄 Archivo actual') {
+            const ed = vscode.window.activeTextEditor;
+            if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
+            consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName);
+          } else {
+            // Workspace: analizar todos los archivos
+            progress.report({ message: 'Buscando archivos...' });
+            const files = await vscode.workspace.findFiles(
+              '**/*.{cs,ts,js,sql}',
+              '{**/node_modules/**,**/obj/**,**/bin/**,**/dist/**,**/out/**}'
+            );
+            if (!files.length) { vscode.window.showInformationMessage('Syntaxis: No hay archivos para analizar.'); return; }
+
+            let totalCrit = 0, totalHigh = 0, totalFinds = 0;
+            const allAgentReports: Report['agentReports'] = [];
+            const allFiles: string[] = [];
+
+            for (let i = 0; i < files.length; i++) {
+              progress.report({ message: `${i + 1}/${files.length}: ${path.basename(files[i].fsPath)}` });
+              try {
+                const doc = await vscode.workspace.openTextDocument(files[i]);
+                const r = analyzeCode(doc.getText(), files[i].fsPath);
+                totalCrit  += r.criticalFindings;
+                totalHigh  += r.highFindings;
+                totalFinds += r.totalFindings;
+                allFiles.push(files[i].fsPath);
+                // Merge agent findings
+                r.agentReports.forEach((ar, idx) => {
+                  if (!allAgentReports[idx]) {
+                    allAgentReports.push({ ...ar });
+                  } else {
+                    allAgentReports[idx].findings.push(...ar.findings);
+                  }
+                });
+              } catch { /* skip unreadable files */ }
+            }
+
+            const ws: Status = totalCrit > 0 ? 'FAIL' : totalHigh > 0 ? 'WARN' : 'PASS';
+            consolidatedReport = {
+              projectName: folder,
+              analyzedAt: new Date().toISOString(),
+              totalExecutionMs: 0,
+              filesAnalyzed: allFiles,
+              overallStatus: ws,
+              overallScore: Math.max(0, 100 - totalCrit * 25 - totalHigh * 10),
+              totalFindings: totalFinds,
+              criticalFindings: totalCrit,
+              highFindings: totalHigh,
+              blockMerge: totalCrit > 0,
+              recommendations: [],
+              agentReports: allAgentReports,
+            };
+          }
+
+          if (!consolidatedReport) { return; }
+          const allFindings = consolidatedReport.agentReports.flatMap(a => a.findings);
+          const savedPaths: string[] = [];
+
+          // ── Escribir archivos según formato ───────────────────────────────
+          const writeJSON = format === 'JSON' || format.includes('Todos');
+          const writeHTML = format === 'HTML' || format.includes('Todos');
+          const writeMD   = format === 'Markdown' || format.includes('Todos');
+
+          if (writeJSON) {
+            const p = path.join(reportsDir, `compliance-${ts}.json`);
+            fs.writeFileSync(p, JSON.stringify(consolidatedReport, null, 2), 'utf8');
+            savedPaths.push(p);
+          }
+
+          if (writeHTML) {
+            const p = path.join(reportsDir, `compliance-${ts}.html`);
+            fs.writeFileSync(p, buildHtmlReport(consolidatedReport, allFindings), 'utf8');
+            savedPaths.push(p);
+          }
+
+          if (writeMD) {
+            const p = path.join(reportsDir, `compliance-${ts}.md`);
+            fs.writeFileSync(p, buildMarkdownReport(consolidatedReport, allFindings), 'utf8');
+            savedPaths.push(p);
+          }
+
+          // ── Notificar y ofrecer abrir ──────────────────────────────────────
+          const fileNames = savedPaths.map(p => path.basename(p)).join(', ');
+          const action = await vscode.window.showInformationMessage(
+            `📊 Reporte${savedPaths.length > 1 ? 's' : ''} generado${savedPaths.length > 1 ? 's' : ''}: ${fileNames}`,
+            'Abrir HTML', 'Abrir JSON', 'Abrir carpeta'
+          );
+          if (action === 'Abrir HTML') {
+            const htmlPath = savedPaths.find(p => p.endsWith('.html'));
+            if (htmlPath) { vscode.env.openExternal(vscode.Uri.file(htmlPath)); }
+          } else if (action === 'Abrir JSON') {
+            const jsonPath = savedPaths.find(p => p.endsWith('.json'));
+            if (jsonPath) { vscode.window.showTextDocument(await vscode.workspace.openTextDocument(jsonPath)); }
+          } else if (action === 'Abrir carpeta') {
+            vscode.env.openExternal(vscode.Uri.file(reportsDir));
+          }
+        }
+      );
     })
   );
 
@@ -286,4 +402,92 @@ function notify(r: Report): void {
   if (r.overallStatus==='FAIL') { vscode.window.showErrorMessage(msg); }
   else if (r.overallStatus==='WARN') { vscode.window.showWarningMessage(msg); }
   else { vscode.window.showInformationMessage(msg); }
+}
+
+export function buildMarkdownReport(report: Report, allFindings: Finding[]): string {
+  const statusLine = report.overallStatus==='FAIL' ? '## ❌ Estado: MERGE BLOQUEADO'
+    : report.overallStatus==='WARN' ? '## ⚠️ Estado: REQUIERE REVISIÓN' : '## ✅ Estado: APROBADO';
+  const totalHours = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
+  const icons: Record<Severity,'🔴'|'🟠'|'🟡'|'🔵'> = { 'CRÍTICA':'🔴','ALTA':'🟠','MEDIA':'🟡','BAJA':'🔵' };
+
+  const rows = allFindings.map(f => {
+    const loc = f.lineNumber ? `\`${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}\`` : '—';
+    const desc = f.description.replace(/\|/g,'\\|').slice(0,80);
+    const rec  = f.recommendation.replace(/\|/g,'\\|').slice(0,70);
+    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |`;
+  }).join('\n');
+
+  return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n` +
+    `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}\n\n---\n\n` +
+    `| Métrica | Valor |\n|---|---|\n` +
+    `| Score | ${report.overallScore}/100 |\n` +
+    `| 🔴 CRÍTICA | ${report.criticalFindings} |\n` +
+    `| 🟠 ALTA | ${report.highFindings} |\n` +
+    `| Total | ${report.totalFindings} |\n` +
+    `| Horas fix | ~${totalHours}h |\n\n` +
+    `## 📊 Hallazgos\n\n` +
+    (allFindings.length
+      ? `| Severidad | Ubicación | Descripción | Artículo | Recomendación |\n|---|---|---|---|---|\n${rows}\n`
+      : `✅ Sin hallazgos.\n`) +
+    `\n---\n> Ley 21.719 (Protección de Datos) · Ley 21.663 (Ciberseguridad) · Syntaxis Compliance Checker\n`;
+}
+
+// ─── Exportar generateHtml inline (no requiere importar src/) ────────────────
+// Esta función es una versión simplificada del generador HTML completo
+// La versión completa vive en src/report-generators/html-report.ts
+export function buildHtmlReport(report: Report, allFindings: Finding[]): string {
+  const statusColor = report.overallStatus==='FAIL'?'#dc2626':report.overallStatus==='WARN'?'#ea580c':'#16a34a';
+  const statusLabel = report.overallStatus==='FAIL'?'❌ MERGE BLOQUEADO':report.overallStatus==='WARN'?'⚠️ REQUIERE REVISIÓN':'✅ APROBADO';
+  const totalHours  = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
+  const esc = (s:string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  const rows = allFindings.map(f => {
+    const icon = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
+    const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
+    const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
+    const loc  = f.lineNumber ? `${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}` : '—';
+    return `<tr style="background:${bg}">
+      <td style="text-align:center">${icon}</td>
+      <td><b style="color:${col}">${f.severity}</b></td>
+      <td><code>${esc(loc)}</code></td>
+      <td>${esc(f.description.substring(0,90))}</td>
+      <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
+      <td style="font-size:.82em">${esc(f.recommendation.substring(0,80))}</td>
+      <td style="text-align:center">${f.estimatedFixHours??'—'}h</td>
+    </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Syntaxis Compliance Report</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;padding:2rem}
+h1{font-size:1.6rem;font-weight:800}h2{margin:1.4rem 0 .7rem;font-size:1.1rem;color:#475569}
+.badge{display:inline-block;padding:.3rem .9rem;border-radius:999px;color:#fff;font-weight:700;font-size:.9rem;background:${statusColor}}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:1rem;margin:1.2rem 0 2rem}
+.card{background:#fff;border-radius:10px;padding:1rem;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+.card .v{font-size:2rem;font-weight:800}.card .l{font-size:.8rem;color:#64748b}
+table{width:100%;border-collapse:collapse;font-size:.84rem}
+th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-weight:600;color:#475569}
+td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top}
+footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
+</style></head><body>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem">
+  <div><h1>🔍 Syntaxis Compliance Report</h1>
+  <p style="color:#64748b;margin-top:.3rem">${esc(report.projectName)} · ${report.analyzedAt}</p></div>
+  <span class="badge">${statusLabel}</span>
+</div>
+<div class="cards">
+  <div class="card"><div class="v">${report.overallScore}</div><div class="l">Score /100</div></div>
+  <div class="card"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">CRÍTICA</div></div>
+  <div class="card"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">ALTA</div></div>
+  <div class="card"><div class="v">${report.totalFindings}</div><div class="l">Total</div></div>
+  <div class="card"><div class="v">${totalHours}</div><div class="l">Horas fix</div></div>
+</div>
+<h2>📊 Hallazgos detallados</h2>
+<table><thead><tr>
+  <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
+</tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
+<footer>Syntaxis Compliance Checker · Ley 21.719 + Ley 21.663 · ${report.analyzedAt}</footer>
+</body></html>`;
 }

@@ -8,6 +8,12 @@ on:
       - '**.ts'
       - '**.js'
       - '**.sql'
+  workflow_dispatch:      # Permite ejecutar manualmente desde GitHub UI
+    inputs:
+      scope:
+        description: 'Archivos a analizar (glob, ej: src/**/*.cs)'
+        required: false
+        default: '**'
 
 permissions:
   contents: read
@@ -29,158 +35,338 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: packages/vscode-extension/package.json
 
-      - name: Instalar dependencias
-        run: |
-          cd packages/vscode-extension
-          npm install
-
-      - name: Compilar TypeScript
-        run: |
-          cd packages/vscode-extension
-          npm run compile
-
-      - name: Obtener archivos modificados
+      - name: Obtener archivos modificados (en PR)
         id: changed
+        if: github.event_name == 'pull_request'
         uses: tj-actions/changed-files@v44
         with:
-          files: |
-            **/*.{cs,ts,js,sql}
+          files: '**/*.{cs,ts,js,sql}'
           files_ignore: |
             **/node_modules/**
             **/dist/**
             **/out/**
+            **/bin/**
+            **/obj/**
 
-      - name: Ejecutar análisis de compliance
-        if: steps.changed.outputs.any_changed == 'true'
+      - name: Ejecutar análisis y generar reportes
         id: analysis
         run: |
-          node -e "
-          const fs = require('fs');
+          node << 'JSEOF'
+          const fs   = require('fs');
           const path = require('path');
+          const crypto = require('crypto');
 
-          // Motor de análisis (misma lógica que extension.ts)
+          // ── Motor de análisis ─────────────────────────────────────────────
           function analyzeFile(filePath) {
-            const code = fs.readFileSync(filePath, 'utf8');
+            let code;
+            try { code = fs.readFileSync(filePath, 'utf8'); }
+            catch { return []; }
             const lines = code.split('\n');
             const findings = [];
             const skip = l => l.trim().startsWith('//') || l.trim().startsWith('*');
 
-            // PII sin cifrado
-            const piiRe = [/\bemail\b/i,/\bphone\b/i,/\brut\b/i,/\bpassword\b/i];
-            const encRe  = [/encrypt/i,/hash/i,/bcrypt/i,/AES/i];
+            // Ley 21.719 — PII sin cifrado
+            const piiRe  = [/\bemail\b/i,/\bphone\b/i,/\brut\b/i,/\bpassword\b/i,/\bsalud\b/i,/\bhealth/i];
+            const encRe  = [/encrypt/i,/hash/i,/bcrypt/i,/AES/i,/cifra/i];
             const propRe = /\b(string|nvarchar|varchar|TEXT)\b/i;
             lines.forEach((line,i) => {
-              if(skip(line)) return;
-              if(piiRe.some(r=>r.test(line)) && !encRe.some(e=>e.test(line)) && propRe.test(line))
-                findings.push({severity:'CRÍTICA',type:'PII_UNENCRYPTED',file:filePath,line:i+1,desc:'PII sin cifrado',law:'Ley 21.719',art:'Art.18'});
+              if (skip(line)) return;
+              if (piiRe.some(r=>r.test(line)) && !encRe.some(e=>e.test(line)) && propRe.test(line))
+                findings.push({ id:crypto.randomUUID(), severity:'CRÍTICA', type:'PII_UNENCRYPTED',
+                  law:'Ley 21.719', article:'Art. 18',
+                  file:filePath, lineNumber:i+1, desc:'Campo con datos personales sin cifrado',
+                  recommendation:'Cifrar con AES-256. Usar Always Encrypted o pgcrypto.',
+                  estimatedFixHours:3, tags:['pii','encryption'] });
             });
 
-            // SQL Injection
-            const sqlRe = [/\"SELECT.*\"\s*\+/,/String\.Format\(.*SELECT/i];
+            // Ley 21.719 — SQL Injection
+            const sqlRe = [/"SELECT.*"\s*\+/,/String\.Format\(.*SELECT/i,/\$".*\{.*\}.*SELECT/i];
             lines.forEach((line,i) => {
-              if(skip(line)) return;
-              if(sqlRe.some(r=>r.test(line)))
-                findings.push({severity:'CRÍTICA',type:'SQL_INJECTION',file:filePath,line:i+1,desc:'SQL Injection potencial',law:'Ley 21.719',art:'Art.18+20'});
+              if (skip(line)) return;
+              if (sqlRe.some(r=>r.test(line)))
+                findings.push({ id:crypto.randomUUID(), severity:'CRÍTICA', type:'SQL_INJECTION',
+                  law:'Ley 21.719', article:'Art. 18 + Art. 20',
+                  file:filePath, lineNumber:i+1, desc:'SQL Injection potencial',
+                  recommendation:'Usar parámetros (@param) o un ORM.',
+                  estimatedFixHours:2, tags:['sql-injection'] });
             });
 
-            // Credenciales hardcodeadas
-            const credRe = [/password\s*=\s*[\"'][^\"']{3,}[\"']/i,/api.?key\s*=\s*[\"'][^\"']{6,}[\"']/i];
+            // Ley 21.719 — PII en logs
+            const logFnRe  = /console\.(log|error)|logger\.(info|error)|\._logger\.Log/i;
+            const piiValRe = /\b(email|password|rut|phone|credit)\b/i;
             lines.forEach((line,i) => {
-              if(skip(line)) return;
-              if(credRe.some(r=>r.test(line)))
-                findings.push({severity:'CRÍTICA',type:'HARDCODED_CRED',file:filePath,line:i+1,desc:'Credencial hardcodeada',law:'Ley 21.663',art:'NIST SC-07'});
+              if (logFnRe.test(line) && piiValRe.test(line))
+                findings.push({ id:crypto.randomUUID(), severity:'ALTA', type:'PII_IN_LOGS',
+                  law:'Ley 21.719', article:'Art. 18 (minimización)',
+                  file:filePath, lineNumber:i+1, desc:'Datos personales expuestos en logs',
+                  recommendation:'Loggear solo IDs, nunca datos personales.',
+                  estimatedFixHours:1, tags:['logging','pii-leak'] });
             });
 
-            // Endpoint sin auth
-            const epRe = /\[Http(Get|Post|Put|Delete)|router\.(get|post)\s*\(/i;
-            const authRe = /\[Authorize|requireAuth|isAuthenticated|verifyToken/i;
+            // Ley 21.663 — Credenciales hardcodeadas
+            const credRe = [/password\s*=\s*["'][^"']{3,}["']/i,/secret\s*=\s*["'][^"']{6,}["']/i,
+              /api.?key\s*=\s*["'][^"']{6,}["']/i,/connectionstring\s*=\s*["'][^"']{10,}["']/i];
             lines.forEach((line,i) => {
-              if(!epRe.test(line)) return;
+              if (skip(line)) return;
+              if (credRe.some(r=>r.test(line)))
+                findings.push({ id:crypto.randomUUID(), severity:'CRÍTICA', type:'HARDCODED_CREDENTIAL',
+                  law:'Ley 21.663', article:'NIST SC-07',
+                  file:filePath, lineNumber:i+1, desc:'Credencial hardcodeada',
+                  recommendation:'Mover a variables de entorno o Azure Key Vault.',
+                  estimatedFixHours:1, tags:['secrets','credentials'] });
+            });
+
+            // Ley 21.663 — Endpoints sin autenticación
+            const epRe   = /\[Http(Get|Post|Put|Delete|Patch)|router\.(get|post|put|delete)\s*\(/i;
+            const authRe = /\[Authorize|requireAuth|isAuthenticated|verifyToken|\.RequireAuthorization/i;
+            lines.forEach((line,i) => {
+              if (!epRe.test(line)) return;
               const ctx = lines.slice(Math.max(0,i-5),i+2).join('\n');
-              if(!authRe.test(ctx))
-                findings.push({severity:'ALTA',type:'NO_AUTH',file:filePath,line:i+1,desc:'Endpoint sin autenticación',law:'Ley 21.663',art:'NIST AC-02'});
+              if (!authRe.test(ctx))
+                findings.push({ id:crypto.randomUUID(), severity:'ALTA', type:'ENDPOINT_NO_AUTH',
+                  law:'Ley 21.663', article:'NIST AC-02',
+                  file:filePath, lineNumber:i+1, desc:'Endpoint sin autenticación',
+                  recommendation:'Agregar [Authorize] o middleware JWT.',
+                  estimatedFixHours:2, tags:['authentication'] });
             });
 
-            // BD sin TLS
-            const insecRe = [/Encrypt\s*=\s*false/i,/TrustServerCertificate\s*=\s*true/i,/sslmode\s*=\s*disable/i];
+            // Ley 21.663 — BD sin TLS
+            const tlsRe = [/Encrypt\s*=\s*false/i,/TrustServerCertificate\s*=\s*true/i,/sslmode\s*=\s*disable/i];
             lines.forEach((line,i) => {
-              if(insecRe.some(r=>r.test(line)))
-                findings.push({severity:'CRÍTICA',type:'NO_TLS',file:filePath,line:i+1,desc:'Conexión BD sin TLS',law:'Ley 21.663',art:'NIST SC-08'});
+              if (tlsRe.some(r=>r.test(line)))
+                findings.push({ id:crypto.randomUUID(), severity:'CRÍTICA', type:'INSECURE_DB',
+                  law:'Ley 21.663', article:'NIST SC-08',
+                  file:filePath, lineNumber:i+1, desc:'Conexión BD sin TLS/SSL',
+                  recommendation:'Activar Encrypt=true y TrustServerCertificate=false.',
+                  estimatedFixHours:1, tags:['tls','database'] });
             });
 
             return findings;
           }
 
-          const changedFiles = process.env.ALL_CHANGED_FILES
-            ? process.env.ALL_CHANGED_FILES.split(' ').filter(f => /\.(cs|ts|js|sql)$/.test(f) && fs.existsSync(f))
-            : [];
+          // ── Determinar archivos a analizar ────────────────────────────────
+          const changedEnv = process.env.ALL_CHANGED_FILES ?? '';
+          let filesToScan = [];
 
-          console.log('Archivos a analizar:', changedFiles.length);
+          if (changedEnv.trim()) {
+            filesToScan = changedEnv.split(' ')
+              .filter(f => /\.(cs|ts|js|sql)$/.test(f) && fs.existsSync(f));
+          } else {
+            // workflow_dispatch: escanear todo el proyecto
+            function walkDir(dir) {
+              let results = [];
+              try {
+                for (const entry of fs.readdirSync(dir, { withFileTypes:true })) {
+                  const full = path.join(dir, entry.name);
+                  if (entry.isDirectory()) {
+                    if (!['node_modules','dist','out','bin','obj','.git'].includes(entry.name))
+                      results = results.concat(walkDir(full));
+                  } else if (/\.(cs|ts|js|sql)$/.test(entry.name)) {
+                    results.push(full);
+                  }
+                }
+              } catch {}
+              return results;
+            }
+            filesToScan = walkDir('.');
+          }
+
+          console.log(`📁 Archivos a analizar: ${filesToScan.length}`);
+
+          // ── Analizar ──────────────────────────────────────────────────────
           let allFindings = [];
-          for (const f of changedFiles) {
-            try { allFindings = allFindings.concat(analyzeFile(f)); }
-            catch(e) { console.error('Error en ' + f + ':', e.message); }
+          for (const f of filesToScan) {
+            const found = analyzeFile(f);
+            if (found.length) console.log(`  ${path.basename(f)}: ${found.length} hallazgo(s)`);
+            allFindings = allFindings.concat(found);
           }
 
           const critical = allFindings.filter(f=>f.severity==='CRÍTICA').length;
           const high     = allFindings.filter(f=>f.severity==='ALTA').length;
-          const report = { critical, high, total: allFindings.length, findings: allFindings };
-          fs.writeFileSync('compliance-report.json', JSON.stringify(report, null, 2));
+          const medium   = allFindings.filter(f=>f.severity==='MEDIA').length;
+          const score    = Math.max(0, 100 - critical*25 - high*10 - medium*3);
+          const status   = critical>0 ? 'FAIL' : high>0 ? 'WARN' : 'PASS';
+          const ts       = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
 
-          require('fs').appendFileSync(process.env.GITHUB_OUTPUT,
-            'critical=' + critical + '\nhigh=' + high + '\n');
-          console.log('CRÍTICA:', critical, '| ALTA:', high, '| Total:', allFindings.length);
-          "
+          // ── Generar reporte JSON ──────────────────────────────────────────
+          const jsonReport = {
+            generatedAt: new Date().toISOString(),
+            analyzedFiles: filesToScan.length,
+            overallStatus: status,
+            overallScore: score,
+            blockMerge: critical > 0,
+            summary: { critical, high, medium, total: allFindings.length },
+            findings: allFindings
+          };
+          fs.writeFileSync('compliance-report.json', JSON.stringify(jsonReport, null, 2));
+
+          // ── Generar reporte HTML ──────────────────────────────────────────
+          const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const statusColor = status==='FAIL'?'#dc2626':status==='WARN'?'#ea580c':'#16a34a';
+          const statusBadge = status==='FAIL'?'❌ MERGE BLOQUEADO':status==='WARN'?'⚠️ REQUIERE REVISIÓN':'✅ APROBADO';
+          const icons = { 'CRÍTICA':'🔴','ALTA':'🟠','MEDIA':'🟡','BAJA':'🔵' };
+          const bgs   = { 'CRÍTICA':'#fef2f2','ALTA':'#fff7ed','MEDIA':'#fefce8','BAJA':'#eff6ff' };
+          const cols  = { 'CRÍTICA':'#dc2626','ALTA':'#ea580c','MEDIA':'#ca8a04','BAJA':'#2563eb' };
+
+          const rows = allFindings.map(f =>
+            `<tr style="background:${bgs[f.severity]??'#fff'}">
+              <td>${icons[f.severity]??'•'}</td>
+              <td style="color:${cols[f.severity]??'#000'};font-weight:700">${f.severity}</td>
+              <td style="font-family:monospace;font-size:.8em">${esc(path.basename(f.file??''))}:${f.lineNumber??'?'}</td>
+              <td>${esc((f.desc??'').slice(0,90))}</td>
+              <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
+              <td style="font-size:.82em">${esc((f.recommendation??'').slice(0,80))}</td>
+              <td style="text-align:center">${f.estimatedFixHours??'—'}h</td>
+            </tr>`
+          ).join('');
+
+          const html = `<!DOCTYPE html><html lang="es">
+<head><meta charset="UTF-8"><title>Syntaxis Compliance — ${ts}</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;padding:2rem}
+h1{font-size:1.5rem;font-weight:800;margin-bottom:.3rem}
+.meta{color:#64748b;font-size:.88rem;margin-bottom:1.5rem}
+.badge{display:inline-block;padding:.3rem .9rem;border-radius:999px;color:#fff;font-weight:700;font-size:.9rem;background:${statusColor};margin-bottom:1.5rem}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.8rem;margin-bottom:2rem}
+.card{background:#fff;border-radius:8px;padding:.8rem;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.v{font-size:1.8rem;font-weight:800}.l{font-size:.75rem;color:#64748b;margin-top:.2rem}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:1rem}
+th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-size:.82rem;font-weight:600;color:#475569}
+td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top;font-size:.82rem}
+footer{text-align:center;color:#94a3b8;font-size:.78rem;margin-top:2rem}</style></head>
+<body>
+<h1>🔍 Syntaxis Compliance Report</h1>
+<div class="meta">Proyecto: ${esc(process.cwd())} · Generado: ${new Date().toISOString()}</div>
+<span class="badge">${statusBadge}</span>
+<div class="cards">
+  <div class="card"><div class="v">${score}</div><div class="l">Score/100</div></div>
+  <div class="card"><div class="v" style="color:#dc2626">${critical}</div><div class="l">CRÍTICA</div></div>
+  <div class="card"><div class="v" style="color:#ea580c">${high}</div><div class="l">ALTA</div></div>
+  <div class="card"><div class="v">${allFindings.length}</div><div class="l">Total</div></div>
+  <div class="card"><div class="v">${filesToScan.length}</div><div class="l">Archivos</div></div>
+</div>
+<table>
+<thead><tr><th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley/Art.</th><th>Recomendación</th><th>Fix</th></tr></thead>
+<tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a;font-weight:600">✅ Sin hallazgos</td></tr>`}</tbody>
+</table>
+<footer>Syntaxis Compliance Checker · Ley 21.719 + Ley 21.663 · ${new Date().toISOString()}</footer>
+</body></html>`;
+
+          fs.writeFileSync('compliance-report.html', html);
+
+          // ── Generar reporte Markdown ──────────────────────────────────────
+          const mdRows = allFindings.map(f => {
+            const loc  = `\`${path.basename(f.file??'?')}:${f.lineNumber??'?'}\``;
+            const desc = (f.desc??'').replace(/\|/g,'\\|').slice(0,80);
+            const rec  = (f.recommendation??'').replace(/\|/g,'\\|').slice(0,70);
+            return `| ${icons[f.severity]??''} ${f.severity} | ${loc} | ${desc} | ${f.law} ${f.article??''} | ${rec} |`;
+          }).join('\n');
+
+          const md = `# 🔍 Syntaxis Compliance Report\n\n` +
+            `${status==='FAIL'?'## ❌ MERGE BLOQUEADO':status==='WARN'?'## ⚠️ REQUIERE REVISIÓN':'## ✅ APROBADO'}\n\n` +
+            `**Archivos analizados:** ${filesToScan.length} · **Generado:** ${new Date().toISOString()}\n\n` +
+            `| Métrica | Valor |\n|---|---|\n` +
+            `| Score | ${score}/100 |\n| 🔴 CRÍTICA | ${critical} |\n| 🟠 ALTA | ${high} |\n| Total | ${allFindings.length} |\n\n` +
+            `## Hallazgos\n\n` +
+            (allFindings.length
+              ? `| Sev | Ubicación | Descripción | Ley | Recomendación |\n|---|---|---|---|---|\n${mdRows}\n`
+              : `✅ Sin hallazgos.\n`) +
+            `\n---\n> Ley 21.719 · Ley 21.663 · Syntaxis Compliance Checker\n`;
+
+          fs.writeFileSync('compliance-report.md', md);
+
+          // ── Output para siguientes steps ──────────────────────────────────
+          const ghOut = process.env.GITHUB_OUTPUT ?? '';
+          if (ghOut) {
+            fs.appendFileSync(ghOut, `critical=${critical}\nhigh=${high}\nstatus=${status}\nscore=${score}\n`);
+          }
+
+          console.log(`\n✅ Reportes generados: compliance-report.{json,html,md}`);
+          console.log(`📊 CRÍTICA: ${critical} | ALTA: ${high} | Score: ${score}/100 | Estado: ${status}`);
+          JSEOF
         env:
-          ALL_CHANGED_FILES: ${{ steps.changed.outputs.all_changed_files }}
+          ALL_CHANGED_FILES: ${{ steps.changed.outputs.all_changed_files || '' }}
 
-      - name: Comentar en PR
-        if: steps.changed.outputs.any_changed == 'true' && github.event_name == 'pull_request'
+      - name: Comentar en PR con resumen
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const report = JSON.parse(fs.readFileSync('compliance-report.json', 'utf8'));
-            const critical = report.critical;
-            const high     = report.high;
+            const critical = report.summary.critical;
+            const high     = report.summary.high;
             const status   = critical > 0 ? '❌ MERGE BLOQUEADO' : high > 0 ? '⚠️ Requiere revisión' : '✅ Aprobado';
 
+            // Leer resumen del markdown para el comment
+            const md = fs.readFileSync('compliance-report.md', 'utf8');
+
             let body = `## 🔍 Syntaxis Compliance Check\n\n`;
-            body += `| Nivel | Cantidad |\n|---|---|\n`;
-            body += `| 🔴 CRÍTICA | ${critical} |\n`;
-            body += `| 🟠 ALTA    | ${high} |\n`;
-            body += `| Total      | ${report.total} |\n\n`;
-            body += `**Estado: ${status}**\n\n`;
+            body += `**Estado: ${status}** &nbsp;|&nbsp; **Score: ${report.overallScore}/100**\n\n`;
+            body += `| 🔴 CRÍTICA | 🟠 ALTA | Total | Archivos |\n|---|---|---|---|\n`;
+            body += `| ${critical} | ${high} | ${report.summary.total} | ${report.analyzedFiles} |\n\n`;
 
             if (report.findings.length > 0) {
-              body += `### Top problemas\n`;
-              report.findings.slice(0, 5).forEach(f => {
-                body += `- \`${f.file}:${f.line}\` **[${f.severity}]** ${f.desc} (${f.law} ${f.art})\n`;
+              body += `### Top hallazgos\n\n`;
+              body += `| Sev | Archivo | Problema | Ley |\n|---|---|---|---|\n`;
+              report.findings.slice(0, 8).forEach(f => {
+                const loc = require('path').basename(f.file ?? '?') + ':' + (f.lineNumber ?? '?');
+                const desc = (f.desc ?? '').replace(/\|/g,'\\|').slice(0,70);
+                body += `| **${f.severity}** | \`${loc}\` | ${desc} | ${f.law} |\n`;
               });
+              if (report.findings.length > 8) {
+                body += `\n*... y ${report.findings.length - 8} hallazgo(s) más. Ver artefacto adjunto.*\n`;
+              }
+            } else {
+              body += `✅ **Sin problemas detectados en los archivos modificados.**\n`;
             }
-            body += `\n> Leyes verificadas: Ley 21.719 (Protección de Datos) + Ley 21.663 (Ciberseguridad)\n`;
 
-            github.rest.issues.createComment({
+            body += `\n---\n`;
+            body += `> 📎 Reporte completo disponible como artefacto del workflow (JSON + HTML + Markdown)\n`;
+            body += `> Leyes: **Ley 21.719** (Protección de Datos) + **Ley 21.663** (Ciberseguridad)\n`;
+
+            // Buscar comment previo del bot para actualizar en lugar de crear uno nuevo
+            const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body
             });
+            const botComment = comments.find(c => c.body?.includes('Syntaxis Compliance Check'));
 
-      - name: Subir reporte
-        if: always() && steps.changed.outputs.any_changed == 'true'
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                comment_id: botComment.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }
+
+      - name: Subir reportes como artefacto
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compliance-report
-          path: compliance-report.json
+          name: compliance-reports-${{ github.run_number }}
+          path: |
+            compliance-report.json
+            compliance-report.html
+            compliance-report.md
           retention-days: 30
 
       - name: Bloquear merge si hay CRÍTICOS
         if: steps.analysis.outputs.critical > 0
         run: |
-          echo "❌ Se encontraron ${{ steps.analysis.outputs.critical }} problema(s) CRÍTICO(S)."
-          echo "Resuelve los problemas antes de hacer merge."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "❌  MERGE BLOQUEADO"
+          echo "   ${{ steps.analysis.outputs.critical }} problema(s) CRÍTICO(S) detectado(s)"
+          echo "   Score: ${{ steps.analysis.outputs.score }}/100"
+          echo "   Resuelve los problemas y vuelve a hacer push."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           exit 1
