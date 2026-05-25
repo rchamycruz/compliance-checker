@@ -32,6 +32,9 @@ function getOutput(): vscode.OutputChannel {
 type Severity = 'CRÍTICA' | 'ALTA' | 'MEDIA' | 'BAJA';
 type Status   = 'PASS' | 'WARN' | 'FAIL';
 
+// Logo de Syntaxis embebido como base64 — se carga en activate()
+let _logoBase64 = '';
+
 interface LawCitation {
   law: string;
   article: string;
@@ -524,6 +527,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // Inicializar aquí — dentro de activate() — para que VS Code API esté lista
   diagnosticCollection = vscode.languages.createDiagnosticCollection('syntaxis');
   context.subscriptions.push(diagnosticCollection);
+
+  // Cargar logo para incluirlo en reportes HTML
+  try {
+    const iconPath = path.join(context.extensionPath, 'icon.png');
+    if (fs.existsSync(iconPath)) {
+      _logoBase64 = fs.readFileSync(iconPath).toString('base64');
+    }
+  } catch { /* logo opcional */ }
 
   getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.5.0 — Ley 21.719 + Ley 21.663');
 
@@ -1031,8 +1042,13 @@ td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top}
 footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 </style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem">
-  <div><h1>🔍 Syntaxis Compliance Report</h1>
-  <p style="color:#64748b;margin-top:.3rem">${esc(report.projectName)} · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</p></div>
+  <div style="display:flex;align-items:center;gap:1rem">
+    ${_logoBase64 ? `<img src="data:image/png;base64,${_logoBase64}" alt="Syntaxis" style="height:52px;width:52px;border-radius:8px;object-fit:contain;flex-shrink:0">` : ''}
+    <div>
+      <h1 style="display:flex;align-items:center;gap:.4rem">🔍 Syntaxis Compliance Report</h1>
+      <p style="color:#64748b;margin-top:.3rem">${esc(report.projectName)} · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</p>
+    </div>
+  </div>
   <span class="badge">${statusLabel}</span>
 </div>
 <div class="cards">
@@ -1052,6 +1068,9 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 <table class="passing-table"><thead><tr>
   <th></th><th>Control</th><th>Ubicación</th><th>Descripción</th><th>Artículo</th><th>Evidencia</th>
 </tr></thead><tbody>${passingRows||`<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#64748b">No se detectaron controles en este análisis</td></tr>`}</tbody></table>
-<footer>Syntaxis Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</footer>
+<footer>
+  ${_logoBase64 ? `<img src="data:image/png;base64,${_logoBase64}" alt="Syntaxis" style="height:24px;width:24px;vertical-align:middle;border-radius:4px;margin-right:.4rem">` : ''}
+  <a href="https://www.syntaxis.cl" style="color:#6366f1;text-decoration:none;font-weight:600">Syntaxis Spa</a> · Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}
+</footer>
 </body></html>`;
 }
