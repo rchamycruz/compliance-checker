@@ -38,11 +38,17 @@ interface Finding {
   file?: string; lineNumber?: number; codeSnippet?: string;
   recommendation: string; estimatedFixHours?: number; tags: string[];
 }
+interface PassingCheck {
+  id: string; type: string; description: string;
+  law: string; article?: string; file?: string; lineNumber?: number;
+  evidence: string;
+}
 interface Report {
   projectName: string; analyzedAt: string; totalExecutionMs: number;
   filesAnalyzed: string[]; overallStatus: Status; overallScore: number;
   totalFindings: number; criticalFindings: number; highFindings: number;
   blockMerge: boolean; recommendations: string[]; generatedBy: string;
+  passingChecks: PassingCheck[];
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
 }
 
@@ -174,6 +180,75 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
   const st: Status = crit>0 ? 'FAIL' : high>0 ? 'WARN' : 'PASS';
   const score = Math.max(0, 100 - crit*25 - high*10);
 
+  // ── Detección de controles que SÍ cumplen ─────────────────────────────────
+  const passingChecks: PassingCheck[] = [];
+
+  // ✅ PII con cifrado aplicado
+  lines.forEach((line,i) => {
+    if (skip(line)) { return; }
+    if (piiRe.some(r=>r.test(line)) && encRe.some(e=>e.test(line)) && propRe.test(line)) {
+      passingChecks.push({ id:crypto.randomUUID(), type:'PII_ENCRYPTED',
+        description:`Campo con datos personales correctamente cifrado`,
+        law:'Ley 21.719', article:'Ley 21.719, Art. 18 — Medidas de seguridad',
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+    }
+  });
+
+  // ✅ Consultas SQL parametrizadas (no concatenadas)
+  const safeQueryRe = /(@\w+|:\w+|\?)\s*(,|\)|;)/;
+  const ormRe = /\.(FromSql|Query|Where|Include|FirstOrDefault|ToList|ExecuteSql)\b|DbSet<|\.createQueryBuilder|knex\.|sequelize\./i;
+  lines.forEach((line,i) => {
+    if (skip(line)) { return; }
+    if ((safeQueryRe.test(line) || ormRe.test(line)) && !sqlRe.some(r=>r.test(line))) {
+      passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_QUERY',
+        description:`Consulta segura: parámetros o ORM detectado`,
+        law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 20 — Seguridad',
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+    }
+  });
+
+  // ✅ Endpoints con autenticación explícita
+  lines.forEach((line,i) => {
+    if (skip(line)) { return; }
+    if (epRe.test(line) && authRe.test(line)) {
+      passingChecks.push({ id:crypto.randomUUID(), type:'ENDPOINT_AUTHENTICATED',
+        description:`Endpoint con autenticación declarada en la misma línea`,
+        law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad',
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+    }
+  });
+
+  // ✅ Credenciales desde variables de entorno / vault
+  const safeCredRe = /Environment\.GetEnvironmentVariable|process\.env\.|KeyVault|secretsmanager|IConfiguration\[|_config\[|GetValue<string>/i;
+  lines.forEach((line,i) => {
+    if (skip(line)) { return; }
+    if (safeCredRe.test(line)) {
+      passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_CREDENTIAL_STORAGE',
+        description:`Credencial obtenida de variable de entorno o vault`,
+        law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Gestión segura de secretos + NIST SC-28',
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+    }
+  });
+
+  // ✅ Logging sin datos personales
+  lines.forEach((line,i) => {
+    if (skip(line)) { return; }
+    if (logFnRe.test(line) && !piiValRe.test(line)) {
+      passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_LOGGING',
+        description:`Log sin datos personales identificables`,
+        law:'Ley 21.719', article:'Ley 21.719, Art. 3 — Principio de minimización',
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+    }
+  });
+
+  // Deduplicar passing checks por (tipo + línea) para no inflar la lista
+  const seen = new Set<string>();
+  const uniquePassing = passingChecks.filter(p => {
+    const k = `${p.type}:${p.lineNumber}`;
+    if (seen.has(k)) { return false; }
+    seen.add(k); return true;
+  });
+
   return {
     projectName: filePath, analyzedAt: new Date().toISOString(),
     totalExecutionMs: Date.now()-t0, filesAnalyzed: [filePath],
@@ -182,6 +257,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     blockMerge: crit>0,
     recommendations: [...new Map(findings.map(f=>[f.type,f.recommendation])).values()].slice(0,5),
     generatedBy: opts?.generatedBy ?? '',
+    passingChecks: uniquePassing,
     agentReports: [
       { agentName:'DPA Agent (Ley 21.719)', law:'Ley 21.719', findings:findings.filter(f=>f.law==='Ley 21.719') },
       { agentName:'CSA Agent (Ley 21.663)', law:'Ley 21.663', findings:findings.filter(f=>f.law==='Ley 21.663') },
@@ -350,6 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
             let totalCrit = 0, totalHigh = 0, totalFinds = 0;
             const allAgentReports: Report['agentReports'] = [];
+            const allPassingChecks: PassingCheck[] = [];
             const allFiles: string[] = [];
 
             for (let i = 0; i < files.length; i++) {
@@ -361,6 +438,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 totalHigh  += r.highFindings;
                 totalFinds += r.totalFindings;
                 allFiles.push(files[i].fsPath);
+                allPassingChecks.push(...r.passingChecks);
                 // Merge agent findings
                 r.agentReports.forEach((ar, idx) => {
                   if (!allAgentReports[idx]) {
@@ -386,6 +464,7 @@ export function activate(context: vscode.ExtensionContext): void {
               blockMerge: totalCrit > 0,
               recommendations: [],
               generatedBy,
+              passingChecks: allPassingChecks,
               agentReports: allAgentReports,
             };
           }
@@ -495,6 +574,11 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |`;
   }).join('\n');
 
+  const passingRows = report.passingChecks.map(p => {
+    const loc = p.lineNumber ? `\`${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}\`` : '—';
+    return `| ✅ ${p.type.replace(/_/g,' ')} | ${loc} | ${p.description.replace(/\|/g,'\\|')} | ${p.article??p.law} |`;
+  }).join('\n');
+
   return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n` +
     `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}` +
     (report.generatedBy ? `  **Generado por:** ${report.generatedBy}` : '') + `\n\n---\n\n` +
@@ -502,12 +586,17 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     `| Score | ${report.overallScore}/100 |\n` +
     `| 🔴 CRÍTICA | ${report.criticalFindings} |\n` +
     `| 🟠 ALTA | ${report.highFindings} |\n` +
-    `| Total | ${report.totalFindings} |\n` +
+    `| Total hallazgos | ${report.totalFindings} |\n` +
+    `| ✅ Controles OK | ${report.passingChecks.length} |\n` +
     `| Horas fix | ~${totalHours}h |\n\n` +
     `## 📊 Hallazgos\n\n` +
     (allFindings.length
       ? `| Severidad | Ubicación | Descripción | Artículo | Recomendación |\n|---|---|---|---|---|\n${rows}\n`
       : `✅ Sin hallazgos.\n`) +
+    `\n## ✅ Controles que cumplen\n\n` +
+    (report.passingChecks.length
+      ? `| Control | Ubicación | Descripción | Artículo |\n|---|---|---|---|\n${passingRows}\n`
+      : `_No se detectaron controles de cumplimiento en este análisis._\n`) +
     `\n---\n> **Ley 21.719** (Protección de Datos Personales — vigente diciembre 2026) · **Ley 21.663** (Marco de Ciberseguridad) · Syntaxis Compliance Checker\n`;
 }
 
@@ -536,6 +625,18 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
     </tr>`;
   }).join('');
 
+  const passingRows = report.passingChecks.map(p => {
+    const loc = p.lineNumber ? `${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}` : '—';
+    return `<tr>
+      <td style="text-align:center">✅</td>
+      <td style="color:#16a34a;font-weight:600">${esc(p.type.replace(/_/g,' '))}</td>
+      <td><code>${esc(loc)}</code></td>
+      <td>${esc(p.description)}</td>
+      <td style="color:#64748b;font-size:.82em">${esc(p.article??p.law)}</td>
+      <td style="font-size:.82em;color:#475569">${esc(p.evidence.substring(0,80))}</td>
+    </tr>`;
+  }).join('');
+
   return `<!DOCTYPE html><html lang="es">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Syntaxis Compliance Report</title>
@@ -549,6 +650,7 @@ h1{font-size:1.6rem;font-weight:800}h2{margin:1.4rem 0 .7rem;font-size:1.1rem;co
 table{width:100%;border-collapse:collapse;font-size:.84rem}
 th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-weight:600;color:#475569}
 td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top}
+.passing-table th{background:#f0fdf4}.passing-table td{border-top:1px solid #dcfce7}
 footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 </style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem">
@@ -560,13 +662,18 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
   <div class="card"><div class="v">${report.overallScore}</div><div class="l">Score /100</div></div>
   <div class="card"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">CRÍTICA</div></div>
   <div class="card"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">ALTA</div></div>
-  <div class="card"><div class="v">${report.totalFindings}</div><div class="l">Total</div></div>
+  <div class="card"><div class="v">${report.totalFindings}</div><div class="l">Hallazgos</div></div>
+  <div class="card"><div class="v" style="color:#16a34a">${report.passingChecks.length}</div><div class="l">Controles OK</div></div>
   <div class="card"><div class="v">${totalHours}</div><div class="l">Horas fix</div></div>
 </div>
 <h2>📊 Hallazgos detallados</h2>
 <table><thead><tr>
   <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
 </tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
+<h2>✅ Controles que cumplen</h2>
+<table class="passing-table"><thead><tr>
+  <th></th><th>Control</th><th>Ubicación</th><th>Descripción</th><th>Artículo</th><th>Evidencia</th>
+</tr></thead><tbody>${passingRows||`<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#64748b">No se detectaron controles en este análisis</td></tr>`}</tbody></table>
 <footer>Syntaxis Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</footer>
 </body></html>`;
 }
