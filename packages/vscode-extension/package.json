@@ -1,7 +1,7 @@
 {
   "name": "syntaxis-compliance-checker",
   "displayName": "Syntaxis Compliance Checker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real",
   "author": "Syntaxis SPA",
   "license": "MIT",
@@ -20,7 +20,8 @@
     "onLanguage:javascript",
     "onLanguage:typescript",
     "onCommand:syntaxis.checkFile",
-    "onCommand:syntaxis.checkWorkspace"
+    "onCommand:syntaxis.checkWorkspace",
+    "onCommand:syntaxis.generateReport"
   ],
   "contributes": {
     "commands": [

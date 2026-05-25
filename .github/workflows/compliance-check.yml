@@ -1,0 +1,186 @@
+name: Compliance Check (Ley 21.719 + 21.663)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.cs'
+      - '**.ts'
+      - '**.js'
+      - '**.sql'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  compliance:
+    name: Analizar cumplimiento normativo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/vscode-extension/package.json
+
+      - name: Instalar dependencias
+        run: |
+          cd packages/vscode-extension
+          npm install
+
+      - name: Compilar TypeScript
+        run: |
+          cd packages/vscode-extension
+          npm run compile
+
+      - name: Obtener archivos modificados
+        id: changed
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            **/*.{cs,ts,js,sql}
+          files_ignore: |
+            **/node_modules/**
+            **/dist/**
+            **/out/**
+
+      - name: Ejecutar análisis de compliance
+        if: steps.changed.outputs.any_changed == 'true'
+        id: analysis
+        run: |
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+
+          // Motor de análisis (misma lógica que extension.ts)
+          function analyzeFile(filePath) {
+            const code = fs.readFileSync(filePath, 'utf8');
+            const lines = code.split('\n');
+            const findings = [];
+            const skip = l => l.trim().startsWith('//') || l.trim().startsWith('*');
+
+            // PII sin cifrado
+            const piiRe = [/\bemail\b/i,/\bphone\b/i,/\brut\b/i,/\bpassword\b/i];
+            const encRe  = [/encrypt/i,/hash/i,/bcrypt/i,/AES/i];
+            const propRe = /\b(string|nvarchar|varchar|TEXT)\b/i;
+            lines.forEach((line,i) => {
+              if(skip(line)) return;
+              if(piiRe.some(r=>r.test(line)) && !encRe.some(e=>e.test(line)) && propRe.test(line))
+                findings.push({severity:'CRÍTICA',type:'PII_UNENCRYPTED',file:filePath,line:i+1,desc:'PII sin cifrado',law:'Ley 21.719',art:'Art.18'});
+            });
+
+            // SQL Injection
+            const sqlRe = [/\"SELECT.*\"\s*\+/,/String\.Format\(.*SELECT/i];
+            lines.forEach((line,i) => {
+              if(skip(line)) return;
+              if(sqlRe.some(r=>r.test(line)))
+                findings.push({severity:'CRÍTICA',type:'SQL_INJECTION',file:filePath,line:i+1,desc:'SQL Injection potencial',law:'Ley 21.719',art:'Art.18+20'});
+            });
+
+            // Credenciales hardcodeadas
+            const credRe = [/password\s*=\s*[\"'][^\"']{3,}[\"']/i,/api.?key\s*=\s*[\"'][^\"']{6,}[\"']/i];
+            lines.forEach((line,i) => {
+              if(skip(line)) return;
+              if(credRe.some(r=>r.test(line)))
+                findings.push({severity:'CRÍTICA',type:'HARDCODED_CRED',file:filePath,line:i+1,desc:'Credencial hardcodeada',law:'Ley 21.663',art:'NIST SC-07'});
+            });
+
+            // Endpoint sin auth
+            const epRe = /\[Http(Get|Post|Put|Delete)|router\.(get|post)\s*\(/i;
+            const authRe = /\[Authorize|requireAuth|isAuthenticated|verifyToken/i;
+            lines.forEach((line,i) => {
+              if(!epRe.test(line)) return;
+              const ctx = lines.slice(Math.max(0,i-5),i+2).join('\n');
+              if(!authRe.test(ctx))
+                findings.push({severity:'ALTA',type:'NO_AUTH',file:filePath,line:i+1,desc:'Endpoint sin autenticación',law:'Ley 21.663',art:'NIST AC-02'});
+            });
+
+            // BD sin TLS
+            const insecRe = [/Encrypt\s*=\s*false/i,/TrustServerCertificate\s*=\s*true/i,/sslmode\s*=\s*disable/i];
+            lines.forEach((line,i) => {
+              if(insecRe.some(r=>r.test(line)))
+                findings.push({severity:'CRÍTICA',type:'NO_TLS',file:filePath,line:i+1,desc:'Conexión BD sin TLS',law:'Ley 21.663',art:'NIST SC-08'});
+            });
+
+            return findings;
+          }
+
+          const changedFiles = process.env.ALL_CHANGED_FILES
+            ? process.env.ALL_CHANGED_FILES.split(' ').filter(f => /\.(cs|ts|js|sql)$/.test(f) && fs.existsSync(f))
+            : [];
+
+          console.log('Archivos a analizar:', changedFiles.length);
+          let allFindings = [];
+          for (const f of changedFiles) {
+            try { allFindings = allFindings.concat(analyzeFile(f)); }
+            catch(e) { console.error('Error en ' + f + ':', e.message); }
+          }
+
+          const critical = allFindings.filter(f=>f.severity==='CRÍTICA').length;
+          const high     = allFindings.filter(f=>f.severity==='ALTA').length;
+          const report = { critical, high, total: allFindings.length, findings: allFindings };
+          fs.writeFileSync('compliance-report.json', JSON.stringify(report, null, 2));
+
+          require('fs').appendFileSync(process.env.GITHUB_OUTPUT,
+            'critical=' + critical + '\nhigh=' + high + '\n');
+          console.log('CRÍTICA:', critical, '| ALTA:', high, '| Total:', allFindings.length);
+          "
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed.outputs.all_changed_files }}
+
+      - name: Comentar en PR
+        if: steps.changed.outputs.any_changed == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('compliance-report.json', 'utf8'));
+            const critical = report.critical;
+            const high     = report.high;
+            const status   = critical > 0 ? '❌ MERGE BLOQUEADO' : high > 0 ? '⚠️ Requiere revisión' : '✅ Aprobado';
+
+            let body = `## 🔍 Syntaxis Compliance Check\n\n`;
+            body += `| Nivel | Cantidad |\n|---|---|\n`;
+            body += `| 🔴 CRÍTICA | ${critical} |\n`;
+            body += `| 🟠 ALTA    | ${high} |\n`;
+            body += `| Total      | ${report.total} |\n\n`;
+            body += `**Estado: ${status}**\n\n`;
+
+            if (report.findings.length > 0) {
+              body += `### Top problemas\n`;
+              report.findings.slice(0, 5).forEach(f => {
+                body += `- \`${f.file}:${f.line}\` **[${f.severity}]** ${f.desc} (${f.law} ${f.art})\n`;
+              });
+            }
+            body += `\n> Leyes verificadas: Ley 21.719 (Protección de Datos) + Ley 21.663 (Ciberseguridad)\n`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Subir reporte
+        if: always() && steps.changed.outputs.any_changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-report
+          path: compliance-report.json
+          retention-days: 30
+
+      - name: Bloquear merge si hay CRÍTICOS
+        if: steps.analysis.outputs.critical > 0
+        run: |
+          echo "❌ Se encontraron ${{ steps.analysis.outputs.critical }} problema(s) CRÍTICO(S)."
+          echo "Resuelve los problemas antes de hacer merge."
+          exit 1
