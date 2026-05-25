@@ -31,7 +31,7 @@ interface Report {
 }
 
 // ─── Motor de análisis (inline, sin dependencias externas) ───────────────────
-function analyzeCode(code: string, filePath: string): Report {
+function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?: boolean }): Report {
   const t0 = Date.now();
   const lines = code.split('\n');
   const findings: Finding[] = [];
@@ -48,7 +48,7 @@ function analyzeCode(code: string, filePath: string): Report {
     if (piiRe.some(r=>r.test(line)) && !encRe.some(e=>e.test(line)) && propRe.test(line)) {
       findings.push({ id: crypto.randomUUID(), type:'PII_UNENCRYPTED',
         description:`Campo con datos personales sin cifrado: "${line.trim().slice(0,70)}"`,
-        severity:'CRÍTICA', law:'Ley 21.719', article:'Art. 18 (Medidas de seguridad)',
+        severity:'CRÍTICA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 — Medidas de seguridad (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Cifrar con AES-256 en reposo. Usar Always Encrypted o pgcrypto.',
         estimatedFixHours:3, tags:['pii','encryption'] });
@@ -62,7 +62,7 @@ function analyzeCode(code: string, filePath: string): Report {
     if (sqlRe.some(r=>r.test(line))) {
       findings.push({ id:crypto.randomUUID(), type:'SQL_INJECTION',
         description:`SQL Injection potencial: "${line.trim().slice(0,70)}"`,
-        severity:'CRÍTICA', law:'Ley 21.719', article:'Art. 18 + Art. 20',
+        severity:'CRÍTICA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 20 — Seguridad y notificación de brechas (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Usar parámetros (@param) o un ORM. Nunca concatenar inputs.',
         estimatedFixHours:2, tags:['sql-injection','security'] });
@@ -77,7 +77,7 @@ function analyzeCode(code: string, filePath: string): Report {
     if (credRe.some(r=>r.test(line))) {
       findings.push({ id:crypto.randomUUID(), type:'HARDCODED_CREDENTIAL',
         description:`Credencial hardcodeada en línea ${i+1}`,
-        severity:'CRÍTICA', law:'Ley 21.663', article:'NIST SC-07 + ISO 27001 A.9.4',
+        severity:'CRÍTICA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad + NIST SC-07 + ISO 27001 A.9.4',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim().replace(/["'][^"']{3,}["']/,'***'),
         recommendation:'Mover a variables de entorno o Azure Key Vault.',
         estimatedFixHours:1, tags:['secrets','credentials'] });
@@ -87,13 +87,22 @@ function analyzeCode(code: string, filePath: string): Report {
   // ── Ley 21.663: Endpoints sin autenticación ───────────────────────────────
   const epRe   = /\[Http(Get|Post|Put|Delete|Patch)|router\.(get|post|put|delete)\s*\(/i;
   const authRe = /\[Authorize|requireAuth|isAuthenticated|verifyToken|\.RequireAuthorization/i;
+
+  // Detectar autenticación aplicada a nivel de clase (controller completamente protegido)
+  const classLevelAuth = /\[Authorize[^\]]*\][\s\S]{0,400}class\s+\w+Controller/m.test(code);
+  // Detectar filtros globales declarados en el mismo archivo (Program.cs / Startup.cs)
+  const fileHasGlobalAuthFilter = /options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(code);
+  // Saltar chequeo por endpoint si hay auth global (clase o filtro global en archivo) o si se pasa desde workspace scan
+  const skipEndpointAuthCheck = classLevelAuth || fileHasGlobalAuthFilter || (opts?.globalAuthFilter === true);
+
   lines.forEach((line,i) => {
     if (!epRe.test(line)) { return; }
+    if (skipEndpointAuthCheck) { return; }
     const ctx = lines.slice(Math.max(0,i-5), i+2).join('\n');
     if (!authRe.test(ctx)) {
       findings.push({ id:crypto.randomUUID(), type:'ENDPOINT_NO_AUTH',
         description:`Endpoint sin autenticación: "${line.trim()}"`,
-        severity:'ALTA', law:'Ley 21.663', article:'NIST AC-02 + ISO 27001 A.9.4.2',
+        severity:'ALTA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad + NIST AC-02 + ISO 27001 A.9.4.2',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Agregar [Authorize] o middleware de autenticación JWT.',
         estimatedFixHours:2, tags:['authentication','access-control'] });
@@ -106,7 +115,7 @@ function analyzeCode(code: string, filePath: string): Report {
     if (insecRe.some(r=>r.test(line))) {
       findings.push({ id:crypto.randomUUID(), type:'INSECURE_DB_CONNECTION',
         description:`Conexión a BD sin TLS/SSL: "${line.trim()}"`,
-        severity:'CRÍTICA', law:'Ley 21.663', article:'NIST SC-08 + ISO 27001 A.13.2',
+        severity:'CRÍTICA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Protección en tránsito + NIST SC-08 + ISO 27001 A.13.2',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Activar Encrypt=true y TrustServerCertificate=false.',
         estimatedFixHours:1, tags:['tls','ssl','database'] });
@@ -120,7 +129,7 @@ function analyzeCode(code: string, filePath: string): Report {
     if (logFnRe.test(line) && piiValRe.test(line)) {
       findings.push({ id:crypto.randomUUID(), type:'PII_IN_LOGS',
         description:`Datos personales en logs: "${line.trim().slice(0,70)}"`,
-        severity:'ALTA', law:'Ley 21.719', article:'Art. 18 + principio de minimización',
+        severity:'ALTA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 3 — Seguridad y principio de minimización (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Loggear solo IDs, nunca datos personales directamente.',
         estimatedFixHours:1, tags:['logging','pii-leak'] });
@@ -214,12 +223,25 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!files.length) { vscode.window.showInformationMessage('Syntaxis: No hay archivos para analizar.'); return; }
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
         title:`Syntaxis: Analizando ${files.length} archivos...`, cancellable:true }, async (progress, token) => {
+        // Pre-pass: detectar filtro global de autenticación en Program.cs / Startup.cs
+        let globalAuthFilter = false;
+        for (const f of files) {
+          const bn = path.basename(f.fsPath).toLowerCase();
+          if (bn === 'program.cs' || bn === 'startup.cs') {
+            try {
+              const doc = await vscode.workspace.openTextDocument(f);
+              if (/options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(doc.getText())) {
+                globalAuthFilter = true; break;
+              }
+            } catch { /* skip */ }
+          }
+        }
         let crit=0, hi=0;
         for (let i=0; i<files.length; i++) {
           if (token.isCancellationRequested) { break; }
           progress.report({ increment:100/files.length, message:path.basename(files[i].fsPath) });
           const doc = await vscode.workspace.openTextDocument(files[i]);
-          const r = analyzeCode(doc.getText(), files[i].fsPath);
+          const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
           refreshDiagnostics(doc); crit+=r.criticalFindings; hi+=r.highFindings;
         }
         const icon = crit>0?'❌':hi>0?'⚠️':'✅';
@@ -271,6 +293,21 @@ export function activate(context: vscode.ExtensionContext): void {
             );
             if (!files.length) { vscode.window.showInformationMessage('Syntaxis: No hay archivos para analizar.'); return; }
 
+            // Pre-pass: detectar filtro global de autenticación en Program.cs / Startup.cs
+            let globalAuthFilter = false;
+            progress.report({ message: 'Detectando configuración de seguridad global...' });
+            for (const f of files) {
+              const bn = path.basename(f.fsPath).toLowerCase();
+              if (bn === 'program.cs' || bn === 'startup.cs') {
+                try {
+                  const doc = await vscode.workspace.openTextDocument(f);
+                  if (/options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(doc.getText())) {
+                    globalAuthFilter = true; break;
+                  }
+                } catch { /* skip */ }
+              }
+            }
+
             let totalCrit = 0, totalHigh = 0, totalFinds = 0;
             const allAgentReports: Report['agentReports'] = [];
             const allFiles: string[] = [];
@@ -279,7 +316,7 @@ export function activate(context: vscode.ExtensionContext): void {
               progress.report({ message: `${i + 1}/${files.length}: ${path.basename(files[i].fsPath)}` });
               try {
                 const doc = await vscode.workspace.openTextDocument(files[i]);
-                const r = analyzeCode(doc.getText(), files[i].fsPath);
+                const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
                 totalCrit  += r.criticalFindings;
                 totalHigh  += r.highFindings;
                 totalFinds += r.totalFindings;
@@ -429,7 +466,7 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     (allFindings.length
       ? `| Severidad | Ubicación | Descripción | Artículo | Recomendación |\n|---|---|---|---|---|\n${rows}\n`
       : `✅ Sin hallazgos.\n`) +
-    `\n---\n> Ley 21.719 (Protección de Datos) · Ley 21.663 (Ciberseguridad) · Syntaxis Compliance Checker\n`;
+    `\n---\n> **Ley 21.719** (Protección de Datos Personales — vigente diciembre 2026) · **Ley 21.663** (Marco de Ciberseguridad) · Syntaxis Compliance Checker\n`;
 }
 
 // ─── Exportar generateHtml inline (no requiere importar src/) ────────────────
@@ -488,6 +525,6 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 <table><thead><tr>
   <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
 </tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
-<footer>Syntaxis Compliance Checker · Ley 21.719 + Ley 21.663 · ${report.analyzedAt}</footer>
+<footer>Syntaxis Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}</footer>
 </body></html>`;
 }

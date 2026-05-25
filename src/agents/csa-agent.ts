@@ -11,7 +11,7 @@ export class CSAAgent extends BaseAgent {
 
   async analyze(input: AnalysisInput): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const { code, filePath } = input;
+    const { code, filePath, globalContext } = input;
     const lines = code.split('\n');
 
     // ─── Regla 1: Credenciales hardcodeadas ──────────────────────────────────
@@ -35,7 +35,7 @@ export class CSAAgent extends BaseAgent {
             description: `${desc} en línea ${idx + 1}: "${trimmed.substring(0, 60)}..."`,
             severity: 'CRÍTICA',
             law: 'Ley 21.663',
-            article: 'NIST SC-07 (Gestión de secretos) + ISO 27001 A.9.4',
+            article: 'Ley 21.663, Art. 6 — Gestión de secretos + NIST SC-07 + ISO 27001 A.9.4',
             file: filePath,
             lineNumber: idx + 1,
             codeSnippet: trimmed.replace(/["'][^"']{3,}["']/, '"***REDACTED***"'),
@@ -67,10 +67,18 @@ export class CSAAgent extends BaseAgent {
       /\.RequireAuthorization/i,
     ];
 
+    // Detectar autenticación aplicada a nivel de clase (controller completo protegido)
+    const classLevelAuth = /\[Authorize[^\]]*\][\s\S]{0,400}class\s+\w+Controller/m.test(code);
+    // Detectar filtros globales en el mismo archivo (Program.cs / Startup.cs)
+    const fileHasGlobalAuthFilter = /options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(code);
+    const skipEndpointAuthCheck = classLevelAuth || fileHasGlobalAuthFilter || (globalContext?.hasGlobalAuthFilter === true);
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const isEndpoint = endpointPatterns.some(p => p.test(line));
       if (!isEndpoint) continue;
+
+      if (skipEndpointAuthCheck) continue;
 
       // Buscar en 5 líneas anteriores algún decorador de autenticación
       const contextStart = Math.max(0, i - 5);
@@ -84,7 +92,7 @@ export class CSAAgent extends BaseAgent {
           description: `Endpoint sin autenticación detectado: "${line.trim()}"`,
           severity: 'ALTA',
           law: 'Ley 21.663',
-          article: 'NIST AC-02 (Gestión de cuentas) + ISO 27001 A.9.4.2',
+          article: 'Ley 21.663, Art. 6 — Obligaciones de seguridad + NIST AC-02 + ISO 27001 A.9.4.2',
           file: filePath,
           lineNumber: i + 1,
           codeSnippet: line.trim(),
@@ -115,7 +123,7 @@ export class CSAAgent extends BaseAgent {
             description: `Algoritmo de hash débil (${algo}) detectado`,
             severity: 'ALTA',
             law: 'Ley 21.663',
-            article: 'NIST SC-13 (Criptografía) + ISO 27001 A.10.1',
+            article: 'Ley 21.663, Art. 6 — Criptografía + NIST SC-13 + ISO 27001 A.10.1',
             file: filePath,
             lineNumber: idx + 1,
             codeSnippet: line.trim(),
@@ -146,7 +154,7 @@ export class CSAAgent extends BaseAgent {
             description: `${desc} en la configuración de conexión`,
             severity: 'CRÍTICA',
             law: 'Ley 21.663',
-            article: 'NIST SC-08 (Protección de datos en tránsito) + ISO 27001 A.13.2',
+            article: 'Ley 21.663, Art. 6 — Protección en tránsito + NIST SC-08 + ISO 27001 A.13.2',
             file: filePath,
             lineNumber: idx + 1,
             codeSnippet: line.trim(),
@@ -176,7 +184,7 @@ export class CSAAgent extends BaseAgent {
             description: `Política CORS insegura: ${desc}`,
             severity: 'MEDIA',
             law: 'Ley 21.663',
-            article: 'NIST SC-07 (Protección de límites) + OWASP Top 10 A5',
+            article: 'Ley 21.663, Art. 6 — Protección de límites + NIST SC-07 + OWASP Top 10 A5',
             file: filePath,
             lineNumber: idx + 1,
             codeSnippet: line.trim(),
@@ -202,7 +210,7 @@ export class CSAAgent extends BaseAgent {
         description: 'Endpoint de autenticación sin rate limiting detectado (vulnerable a fuerza bruta)',
         severity: 'ALTA',
         law: 'Ley 21.663',
-        article: 'NIST SI-04 (Monitoreo) + ISO 27001 A.12.6.1',
+        article: 'Ley 21.663, Art. 6 — Monitoreo y control + NIST SI-04 + ISO 27001 A.12.6.1',
         file: filePath,
         recommendation:
           'Implementar rate limiting en endpoints de login: máx 5 intentos/min por IP. Usar AspNetCoreRateLimit o express-rate-limit.',

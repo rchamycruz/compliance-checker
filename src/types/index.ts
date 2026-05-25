@@ -56,4 +56,7 @@ export interface AnalysisInput {
   filePath: string;
   fileType: 'csharp' | 'javascript' | 'typescript' | 'sql' | 'json' | 'unknown';
   projectRoot?: string;
+  globalContext?: {
+    hasGlobalAuthFilter?: boolean; // true si Program.cs/Startup.cs registra un filtro global de autorización
+  };
 }
