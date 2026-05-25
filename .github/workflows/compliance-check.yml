@@ -222,35 +222,35 @@ jobs:
           ).join('');
 
           const html = `<!DOCTYPE html><html lang="es">
-<head><meta charset="UTF-8"><title>Syntaxis Compliance — ${ts}</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;padding:2rem}
-h1{font-size:1.5rem;font-weight:800;margin-bottom:.3rem}
-.meta{color:#64748b;font-size:.88rem;margin-bottom:1.5rem}
-.badge{display:inline-block;padding:.3rem .9rem;border-radius:999px;color:#fff;font-weight:700;font-size:.9rem;background:${statusColor};margin-bottom:1.5rem}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.8rem;margin-bottom:2rem}
-.card{background:#fff;border-radius:8px;padding:.8rem;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.v{font-size:1.8rem;font-weight:800}.l{font-size:.75rem;color:#64748b;margin-top:.2rem}
-table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:1rem}
-th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-size:.82rem;font-weight:600;color:#475569}
-td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top;font-size:.82rem}
-footer{text-align:center;color:#94a3b8;font-size:.78rem;margin-top:2rem}</style></head>
-<body>
-<h1>🔍 Syntaxis Compliance Report</h1>
-<div class="meta">Proyecto: ${esc(process.cwd())} · Generado: ${new Date().toISOString()}</div>
-<span class="badge">${statusBadge}</span>
-<div class="cards">
-  <div class="card"><div class="v">${score}</div><div class="l">Score/100</div></div>
-  <div class="card"><div class="v" style="color:#dc2626">${critical}</div><div class="l">CRÍTICA</div></div>
-  <div class="card"><div class="v" style="color:#ea580c">${high}</div><div class="l">ALTA</div></div>
-  <div class="card"><div class="v">${allFindings.length}</div><div class="l">Total</div></div>
-  <div class="card"><div class="v">${filesToScan.length}</div><div class="l">Archivos</div></div>
-</div>
-<table>
-<thead><tr><th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley/Art.</th><th>Recomendación</th><th>Fix</th></tr></thead>
-<tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a;font-weight:600">✅ Sin hallazgos</td></tr>`}</tbody>
-</table>
-<footer>Syntaxis Compliance Checker · Ley 21.719 + Ley 21.663 · ${new Date().toISOString()}</footer>
-</body></html>`;
+          <head><meta charset="UTF-8"><title>Syntaxis Compliance — ${ts}</title>
+          <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;padding:2rem}
+          h1{font-size:1.5rem;font-weight:800;margin-bottom:.3rem}
+          .meta{color:#64748b;font-size:.88rem;margin-bottom:1.5rem}
+          .badge{display:inline-block;padding:.3rem .9rem;border-radius:999px;color:#fff;font-weight:700;font-size:.9rem;background:${statusColor};margin-bottom:1.5rem}
+          .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.8rem;margin-bottom:2rem}
+          .card{background:#fff;border-radius:8px;padding:.8rem;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+          .v{font-size:1.8rem;font-weight:800}.l{font-size:.75rem;color:#64748b;margin-top:.2rem}
+          table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:1rem}
+          th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-size:.82rem;font-weight:600;color:#475569}
+          td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top;font-size:.82rem}
+          footer{text-align:center;color:#94a3b8;font-size:.78rem;margin-top:2rem}</style></head>
+          <body>
+          <h1>🔍 Syntaxis Compliance Report</h1>
+          <div class="meta">Proyecto: ${esc(process.cwd())} · Generado: ${new Date().toISOString()}</div>
+          <span class="badge">${statusBadge}</span>
+          <div class="cards">
+            <div class="card"><div class="v">${score}</div><div class="l">Score/100</div></div>
+            <div class="card"><div class="v" style="color:#dc2626">${critical}</div><div class="l">CRÍTICA</div></div>
+            <div class="card"><div class="v" style="color:#ea580c">${high}</div><div class="l">ALTA</div></div>
+            <div class="card"><div class="v">${allFindings.length}</div><div class="l">Total</div></div>
+            <div class="card"><div class="v">${filesToScan.length}</div><div class="l">Archivos</div></div>
+          </div>
+          <table>
+          <thead><tr><th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley/Art.</th><th>Recomendación</th><th>Fix</th></tr></thead>
+          <tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a;font-weight:600">✅ Sin hallazgos</td></tr>`}</tbody>
+          </table>
+          <footer>Syntaxis Compliance Checker · Ley 21.719 + Ley 21.663 · ${new Date().toISOString()}</footer>
+          </body></html>`;
 
           fs.writeFileSync('compliance-report.html', html);
 
