@@ -46,26 +46,18 @@
       }
     ]
   },
-  "files": [
-    "out/**",
-    "LICENSE",
-    "README.md"
-  ],
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "node esbuild.js",
+    "compile:tsc": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package --no-dependencies",
+    "package": "node esbuild.js && vsce package",
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
     "@types/vscode": "^1.60.0",
     "@types/node": "^20.0.0",
     "@types/mocha": "^10.0.0",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "axios": "^1.6.0",
-    "dotenv": "^16.3.1",
-    "pino": "^8.16.1"
+    "typescript": "^5.0.0",
+    "esbuild": "^0.20.0"
   }
 }

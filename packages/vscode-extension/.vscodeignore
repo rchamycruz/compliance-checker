@@ -1,0 +1,21 @@
+# Excluir todo y solo incluir lo necesario
+**
+!out/extension.js
+!package.json
+!LICENSE
+!README.md
+
+# Excluir explícitamente rutas relativas al padre
+../../**
+../**
+
+# Desarrollo
+src/**
+*.ts
+tsconfig.json
+esbuild.js
+node_modules/**
+.gitignore
+.eslintrc*
+*.map
+*.vsix

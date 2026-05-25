@@ -381,9 +381,12 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
 }
 
 // ─── Diagnósticos en tiempo real ─────────────────────────────────────────────
-const diagnosticCollection = vscode.languages.createDiagnosticCollection('syntaxis');
+// NOTA: Se inicializa dentro de activate() — no a nivel de módulo,
+// para evitar que VS Code API se llame antes de que el host esté listo.
+let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 
 function refreshDiagnostics(document: vscode.TextDocument): void {
+  if (!diagnosticCollection) { return; }
   const supported = ['csharp','javascript','typescript','sql'];
   if (!supported.includes(document.languageId)) { diagnosticCollection.delete(document.uri); return; }
 
@@ -409,6 +412,10 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
 
 // ─── Activación ───────────────────────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext): void {
+  // Inicializar aquí — dentro de activate() — para que VS Code API esté lista
+  diagnosticCollection = vscode.languages.createDiagnosticCollection('syntaxis');
+  context.subscriptions.push(diagnosticCollection);
+
   getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.3.0 — Ley 21.719 + Ley 21.663');
 
   // Debounce diagnósticos (800ms)
@@ -684,7 +691,8 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  diagnosticCollection.dispose();
+  diagnosticCollection?.dispose();
+  diagnosticCollection = undefined;
   outputChannel?.dispose();
   outputChannel = undefined;
 }
