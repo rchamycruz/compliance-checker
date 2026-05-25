@@ -4,6 +4,21 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 
+/** Sube desde startDir hasta encontrar la raíz del proyecto (.git / package.json / .sln). */
+function findProjectRoot(startDir: string): string {
+  let dir = startDir;
+  while (true) {
+    if (
+      fs.existsSync(path.join(dir, '.git')) ||
+      fs.existsSync(path.join(dir, 'package.json')) ||
+      fs.existsSync(path.join(dir, '.sln'))
+    ) { return dir; }
+    const parent = path.dirname(dir);
+    if (parent === dir) { return startDir; }
+    dir = parent;
+  }
+}
+
 // OutputChannel singleton — evita re-crear en cada llamada (memory leak fix)
 let outputChannel: vscode.OutputChannel | undefined;
 function getOutput(): vscode.OutputChannel {
@@ -267,11 +282,15 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!format) { return; }
 
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const activeEditorFolder = vscode.window.activeTextEditor
-        ? path.dirname(vscode.window.activeTextEditor.document.fileName)
-        : '.';
-      const folder = workspaceFolder ?? activeEditorFolder;
-      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const activeFile = vscode.window.activeTextEditor?.document.fileName;
+      const folder = workspaceFolder
+        ?? (activeFile ? findProjectRoot(path.dirname(activeFile)) : undefined);
+      if (!folder) {
+        vscode.window.showWarningMessage('Syntaxis: Abre un proyecto o archivo primero.');
+        return;
+      }
+      const now = new Date();
+      const ts = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
       const reportsDir = path.join(folder, 'compliance-reports');
       if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }
 
