@@ -4,6 +4,7 @@
 !package.json
 !LICENSE
 !README.md
+!icon.png
 
 # Excluir explícitamente rutas relativas al padre
 ../../**

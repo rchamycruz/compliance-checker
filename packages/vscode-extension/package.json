@@ -18,6 +18,7 @@
     "Other"
   ],
   "main": "./out/extension.js",
+  "icon": "icon.png",
   "activationEvents": [
     "onStartupFinished",
     "onLanguage:csharp",
