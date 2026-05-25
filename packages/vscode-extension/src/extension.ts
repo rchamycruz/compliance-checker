@@ -37,6 +37,7 @@ interface LawCitation {
   article: string;
   title: string;
   text: string;
+  whyFix: string;
   url?: string;
 }
 
@@ -63,6 +64,14 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 18 — Deber de seguridad',
     title: 'Medidas de seguridad en el tratamiento de datos personales',
     text: `"El responsable de datos deberá adoptar las medidas técnicas y organizativas necesarias para garantizar la seguridad de los datos personales y evitar su alteración, pérdida, tratamiento o acceso no autorizado. Entre dichas medidas deberá considerar, según la naturaleza de los datos y los riesgos a que estén expuestos, el cifrado de datos en reposo y en tránsito, especialmente respecto de datos sensibles como los relativos a la salud, situación económica, origen racial o étnico, vida u orientación sexual."`,
+    whyFix: `Este campo almacena datos personales identificables en texto claro. Si la base de datos es vulnerada (por un ataque externo, un backup expuesto o un acceso interno indebido), esos datos quedan completamente expuestos.
+
+Bajo la Ley 21.719, esto constituye una infracción grave que puede derivar en:
+• Multas de hasta 5.000 UTM (~$350M CLP) aplicadas por la Agencia de Protección de Datos
+• Obligación de notificar públicamente la brecha a todos los titulares afectados
+• Responsabilidad civil ante los titulares por daños y perjuicios
+
+Cifrar este campo con AES-256 garantiza que aunque los datos sean extraídos, sean ilegibles sin la clave. Es la medida técnica mínima exigida por la ley y la más eficaz para proteger a tus usuarios.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -71,6 +80,15 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 18 + Art. 20 — Seguridad y notificación de vulneraciones',
     title: 'Seguridad en el tratamiento y deber de notificación de brechas',
     text: `Art. 18: "El responsable deberá implementar medidas técnicas para proteger los datos personales contra accesos no autorizados. Ello incluye el uso de consultas parametrizadas y controles de validación de entrada en todos los sistemas que procesen datos personales, a fin de prevenir ataques de inyección de código.\n\nArt. 20: "En caso de vulneración de seguridad que afecte datos personales, el responsable deberá notificar a la Agencia de Protección de Datos en el plazo de 72 horas desde que tomó conocimiento del hecho, indicando la naturaleza de la vulneración, los datos afectados y las medidas adoptadas."`,
+    whyFix: `Una inyección SQL en este punto permite a un atacante leer, modificar o eliminar cualquier dato de la base de datos con una sola petición maliciosa. Si tu sistema almacena datos de usuarios chilenos, esto activa de inmediato los deberes de la Ley 21.719.
+
+Las consecuencias concretas son:
+• Exposición masiva de datos personales de todos tus usuarios
+• Obligación legal de notificar la brecha a la Agencia dentro de 72 horas (Art. 20)
+• Notificación individual a cada titular afectado, con el costo reputacional que eso implica
+• Multas que pueden superar las 10.000 UTM en casos de negligencia grave
+
+Usar parámetros (@param) o un ORM toma menos de 5 minutos y elimina completamente este vector de ataque. Es la corrección con mejor ratio esfuerzo/impacto en toda la seguridad de aplicaciones.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -79,6 +97,14 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 3 + Art. 18 — Minimización y seguridad',
     title: 'Principio de minimización y prohibición de registros innecesarios',
     text: `Art. 3 (Principio de minimización): "Los datos personales deben ser adecuados, pertinentes y limitados a lo necesario en relación con los fines para los que son tratados. El responsable no podrá tratar datos en mayor cantidad o calidad que la estrictamente necesaria para el cumplimiento de la finalidad declarada.\n\nArt. 18: "Queda expresamente prohibido almacenar datos personales en registros de eventos (logs) del sistema salvo que ello sea estrictamente necesario para la detección de incidentes de seguridad, caso en el cual deberán ser anonimizados o seudonimizados de inmediato."`,
+    whyFix: `Los archivos de log son uno de los vectores de fuga de datos más subestimados. A diferencia de la base de datos (que suele estar cifrada y protegida), los logs tienden a:
+• Guardarse en texto plano y replicarse en múltiples sistemas (Splunk, CloudWatch, ELK, etc.)
+• Ser accesibles por desarrolladores, soporte y herramientas de monitoreo sin control de acceso estricto
+• Retenerse durante meses o años sin políticas claras de eliminación
+
+Bajo el principio de minimización de la Ley 21.719, incluir emails, RUTs o contraseñas en logs constituye un tratamiento excesivo e innecesario de datos personales. En una auditoría, este patrón se considera una falla de diseño sistémica, no un error puntual.
+
+Reemplazar el dato personal por un ID anónimo (ej: userId en vez de email) protege a tus usuarios sin perder trazabilidad operacional.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -87,6 +113,12 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 18 — Deber de seguridad (cumplimiento)',
     title: 'Cifrado correcto de datos personales — control aprobado',
     text: `"El responsable de datos deberá adoptar las medidas técnicas y organizativas necesarias para garantizar la seguridad de los datos personales. El cifrado de datos en reposo mediante algoritmos robustamente aceptados (AES-256, RSA-2048 o equivalentes) es considerado una medida técnica adecuada para el cumplimiento del deber de seguridad establecido en el presente artículo."`,
+    whyFix: `✅ Este control ya está bien implementado. Mantener el cifrado en este campo es clave porque:
+• Protege los datos ante brechas de BD, backups expuestos o accesos internos indebidos
+• Demuestra cumplimiento proactivo ante una auditoría de la Agencia de Protección de Datos
+• Reduce la clasificación de riesgo del incidente si ocurre una brecha (datos cifrados = menor impacto legal)
+
+Asegúrate de que la clave de cifrado esté gestionada por un sistema dedicado (Key Vault, KMS) y de rotar las claves periódicamente.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -95,6 +127,12 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 18 + Art. 20 — Seguridad (cumplimiento)',
     title: 'Consultas parametrizadas — control aprobado',
     text: `Art. 18: "El uso de consultas parametrizadas, procedimientos almacenados y ORMs que separan el código de los datos constituye una medida técnica adecuada para la protección de datos personales almacenados en bases de datos, previniendo accesos o modificaciones no autorizadas mediante ataques de inyección SQL."`,
+    whyFix: `✅ Este patrón está correctamente implementado. Las consultas parametrizadas eliminan por completo el vector de SQL Injection en este punto.
+
+Para mantener este nivel de seguridad:
+• Asegúrate de que ningún valor externo (parámetro de URL, body, header) se concatene directamente en queries SQL
+• Aplica el mismo patrón de forma consistente en todos los endpoints del proyecto
+• Considera un análisis estático periódico para detectar regresiones`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -103,6 +141,12 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 3 — Principio de minimización (cumplimiento)',
     title: 'Logging sin datos personales — control aprobado',
     text: `"Los datos personales deben ser adecuados, pertinentes y limitados a lo necesario en relación con los fines para los que son tratados. El registro de eventos de sistema que no contenga datos personales identificables cumple con el principio de minimización, reduciendo el riesgo de exposición no autorizada de información personal en los registros operacionales."`,
+    whyFix: `✅ Este log está bien diseñado: registra eventos operacionales sin exponer datos personales.
+
+Para mantener este estándar en el proyecto:
+• Establece una política de logging que explicite qué campos están prohibidos en logs (email, RUT, contraseñas, teléfonos)
+• Usa IDs internos o hashes para trazabilidad sin exponer identidades
+• Revisa el nivel de log en producción (INFO/WARN) para evitar que logs DEBUG con datos sensibles lleguen a ambientes productivos`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
   },
 
@@ -112,6 +156,15 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 6 — Obligaciones de ciberseguridad',
     title: 'Gestión segura de credenciales y secretos',
     text: `"Las instituciones y operadores de importancia vital deberán implementar medidas de ciberseguridad que incluyan, al menos: (a) sistemas de gestión de identidades y accesos que garanticen que las credenciales de autenticación no sean almacenadas en texto claro ni embebidas directamente en el código fuente de las aplicaciones; (b) uso de sistemas de gestión de secretos (secret managers, vaults) o variables de entorno protegidas para el almacenamiento de contraseñas, tokens y claves de API; (c) rotación periódica y revocación inmediata de credenciales comprometidas."`,
+    whyFix: `Una credencial en el código fuente es una de las vulnerabilidades más explotadas en la industria. El código llega a:
+• Repositorios Git (incluyendo el historial, aunque luego se borre del archivo)
+• Builds y artefactos de CI/CD
+• Logs de deployment
+• Equipos de desarrollo con distintos niveles de acceso
+
+La Ley 21.663 exige que las credenciales estén gestionadas de forma segura. Si esta credencial da acceso a un sistema que procesa datos personales de chilenos, su exposición activa también los deberes de la Ley 21.719.
+
+Mover la credencial a una variable de entorno o a Azure Key Vault toma 10 minutos y elimina permanentemente este riesgo. Recuerda también rotar la credencial expuesta, ya que aunque la corrijas en el código, si alguien la leyó del historial de Git, sigue siendo válida.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
   },
 
@@ -120,6 +173,14 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 6 — Obligaciones de ciberseguridad (control de acceso)',
     title: 'Autenticación y control de acceso en interfaces de red',
     text: `"Los operadores de servicios esenciales e infraestructura crítica de la información deberán: (a) implementar mecanismos de autenticación en todos los puntos de acceso a sistemas que procesen información sensible o crítica; (b) aplicar el principio de mínimo privilegio, de modo que ninguna interfaz o endpoint de red quede accesible sin verificación previa de identidad; (c) registrar y monitorear los accesos a dichos sistemas. El incumplimiento de estas obligaciones constituye infracción grave según el Art. 35 de la presente ley."`,
+    whyFix: `Un endpoint sin autenticación es una puerta abierta a cualquier usuario de internet. Si este endpoint consulta o modifica datos, cualquier persona puede invocar la operación sin identificarse.
+
+En el contexto de tu proyecto, esto significa:
+• Acceso no autorizado a datos que podrían ser personales (activando Ley 21.719)
+• Posibilidad de manipulación o extracción masiva de información del sistema
+• Incumplimiento directo del Art. 6 de la Ley 21.663, que exige autenticación en todos los puntos de acceso
+
+Agregar [Authorize] o el middleware JWT correspondiente es la corrección más rápida. Si el endpoint debe ser público por diseño, documenta explícitamente esa decisión para que quede fuera del alcance de la auditoría.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
   },
 
@@ -128,6 +189,14 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 6 — Protección de datos en tránsito',
     title: 'Cifrado de comunicaciones y protección en tránsito',
     text: `"Las instituciones afectas a la presente ley deberán cifrar las comunicaciones que contengan información sensible o crítica mediante protocolos criptográficos actualizados (TLS 1.2 como mínimo, recomendándose TLS 1.3). Queda expresamente prohibido deshabilitar el cifrado en conexiones a bases de datos que almacenen datos personales o información estratégica, así como aceptar certificados no verificados en entornos de producción, lo cual expone los datos a ataques de intercepción (man-in-the-middle)."`,
+    whyFix: `Una conexión a base de datos sin TLS envía todos los datos en texto claro por la red. Cualquier actor en la misma red (un atacante, un operador de infraestructura o una herramienta de monitoreo comprometida) puede interceptar y leer:
+• Credenciales de acceso a la base de datos
+• Datos personales consultados o insertados
+• Queries completas con su contenido
+
+En ambientes cloud (Azure, AWS, GCP), el tráfico entre servicios pasa por redes compartidas donde este tipo de intercepción es posible. La Ley 21.663 exige cifrado de comunicaciones como medida mínima obligatoria.
+
+Activar Encrypt=true y TrustServerCertificate=false es un cambio de una línea en el connection string que elimina completamente este riesgo.`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
   },
 
@@ -136,6 +205,12 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 6 — Control de acceso (cumplimiento)',
     title: 'Autenticación declarada en endpoint — control aprobado',
     text: `"Los mecanismos de autenticación explícitamente declarados en los puntos de acceso a la API (atributos [Authorize], middlewares de verificación de token JWT, o filtros de autenticación a nivel de controlador) constituyen controles adecuados para el cumplimiento del deber de control de acceso establecido en el Art. 6, garantizando que solo usuarios o sistemas debidamente autenticados puedan consumir los servicios expuestos."`,
+    whyFix: `✅ Este endpoint está correctamente protegido con autenticación declarada.
+
+Para mantener y reforzar este control:
+• Verifica que la autorización también esté configurada (no solo autenticación) — un usuario autenticado no debería poder acceder a recursos de otros usuarios
+• Asegúrate de que los tokens JWT tengan tiempo de expiración razonable (máx. 24h para acceso, 7 días para refresh)
+• Registra los accesos en logs de auditoría para detectar patrones anómalos`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
   },
 
@@ -144,6 +219,13 @@ const LAW_CITATIONS: Record<string, LawCitation> = {
     article: 'Art. 6 — Gestión de secretos (cumplimiento)',
     title: 'Credenciales desde variables de entorno o vault — control aprobado',
     text: `"El almacenamiento de credenciales, tokens y claves de API en variables de entorno del sistema operativo o en servicios dedicados de gestión de secretos (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, etc.) constituye una práctica técnica adecuada para el cumplimiento de las obligaciones de ciberseguridad, al evitar la exposición de credenciales en el código fuente y facilitar su rotación controlada."`,
+    whyFix: `✅ Esta credencial se obtiene de forma segura desde variables de entorno o un vault.
+
+Para mantener este estándar a lo largo del proyecto:
+• Documenta en el README qué variables de entorno son requeridas (sin sus valores)
+• Implementa rotación periódica de las credenciales productivas (mínimo cada 90 días)
+• Asegúrate de que los archivos .env no estén en el repositorio Git (verifica .gitignore)
+• En CI/CD, usa los mecanismos de secrets del proveedor (GitHub Secrets, Azure Key Vault references) en lugar de variables de texto plano`,
     url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
   },
 };
@@ -453,7 +535,8 @@ export function activate(context: vscode.ExtensionContext): void {
             md.appendMarkdown(`**${icon} ${c.law}**\n\n`);
             md.appendMarkdown(`**${c.article}** — *${c.title}*\n\n`);
             md.appendMarkdown(`---\n\n${c.text.replace(/\n/g, '\n\n')}\n\n`);
-            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})`); }
+            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})\n\n`); }
+            md.appendMarkdown(`---\n\n**❓ ¿Por qué debería implementar esta corrección?**\n\n${c.whyFix.replace(/\n/g, '\n\n')}`);
             const lineRange = document.lineAt(position.line).range;
             return new vscode.Hover(md, lineRange);
           }
@@ -466,7 +549,8 @@ export function activate(context: vscode.ExtensionContext): void {
             md.appendMarkdown(`**✅ ${c.law}** — Control aprobado\n\n`);
             md.appendMarkdown(`**${c.article}** — *${c.title}*\n\n`);
             md.appendMarkdown(`---\n\n${c.text.replace(/\n/g, '\n\n')}\n\n`);
-            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})`); }
+            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})\n\n`); }
+            md.appendMarkdown(`---\n\n**❓ ¿Por qué es importante mantener este control?**\n\n${c.whyFix.replace(/\n/g, '\n\n')}`);
             const lineRange = document.lineAt(position.line).range;
             return new vscode.Hover(md, lineRange);
           }
@@ -748,7 +832,7 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     const desc = f.description.replace(/\|/g,'\\|').slice(0,80);
     const rec  = f.recommendation.replace(/\|/g,'\\|').slice(0,70);
     const citationBlock = f.citation
-      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n</details>`
+      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n\n**❓ ¿Por qué debería implementar esta corrección?**\n\n${f.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
     return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}`;
   }).join('\n');
@@ -756,7 +840,7 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
   const passingRows = report.passingChecks.map(p => {
     const loc = p.lineNumber ? `\`${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}\`` : '—';
     const citationBlock = p.citation
-      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${p.citation.law}**  \n**${p.citation.article}** — *${p.citation.title}*\n\n> ${p.citation.text.replace(/\n/g,'\n> ')}\n\n${p.citation.url ? `[📖 Texto completo en BCN](${p.citation.url})` : ''}\n</details>`
+      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${p.citation.law}**  \n**${p.citation.article}** — *${p.citation.title}*\n\n> ${p.citation.text.replace(/\n/g,'\n> ')}\n\n${p.citation.url ? `[📖 Texto completo en BCN](${p.citation.url})` : ''}\n\n**❓ ¿Por qué es importante mantener este control?**\n\n${p.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
     return `| ✅ ${p.type.replace(/_/g,' ')} | ${loc} | ${p.description.replace(/\|/g,'\\|')} | ${p.article??p.law} |\n${citationBlock}`;
   }).join('\n');
@@ -804,8 +888,12 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
             <div style="margin-top:.6rem;padding:.8rem 1rem;background:#f8fafc;border-left:3px solid #6366f1;border-radius:4px;font-size:.82rem;line-height:1.6">
               <p style="font-weight:700;color:#312e81;margin-bottom:.3rem">${esc(f.citation.law)}</p>
               <p style="font-weight:600;color:#4338ca;margin-bottom:.5rem">${esc(f.citation.article)} — <em>${esc(f.citation.title)}</em></p>
-              <blockquote style="margin:0;padding:.5rem .8rem;background:#eef2ff;border-radius:3px;color:#1e1b4b;white-space:pre-wrap">${esc(f.citation.text)}</blockquote>
-              ${f.citation.url ? `<p style="margin-top:.5rem"><a href="${f.citation.url}" style="color:#4f46e5;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+              <blockquote style="margin:0 0 .8rem;padding:.5rem .8rem;background:#eef2ff;border-radius:3px;color:#1e1b4b;white-space:pre-wrap">${esc(f.citation.text)}</blockquote>
+              ${f.citation.url ? `<p style="margin-bottom:.8rem"><a href="${f.citation.url}" style="color:#4f46e5;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+              <div style="margin-top:.6rem;padding:.7rem .9rem;background:#fffbeb;border-left:3px solid #f59e0b;border-radius:4px">
+                <p style="font-weight:700;color:#92400e;margin-bottom:.4rem;font-size:.83rem">❓ ¿Por qué debería implementar esta corrección?</p>
+                <p style="color:#78350f;white-space:pre-wrap;font-size:.81rem">${esc(f.citation.whyFix)}</p>
+              </div>
             </div>
           </details>
         </td>
@@ -831,8 +919,12 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
             <div style="margin-top:.6rem;padding:.8rem 1rem;background:#f8fafc;border-left:3px solid #16a34a;border-radius:4px;font-size:.82rem;line-height:1.6">
               <p style="font-weight:700;color:#14532d;margin-bottom:.3rem">${esc(p.citation.law)}</p>
               <p style="font-weight:600;color:#15803d;margin-bottom:.5rem">${esc(p.citation.article)} — <em>${esc(p.citation.title)}</em></p>
-              <blockquote style="margin:0;padding:.5rem .8rem;background:#f0fdf4;border-radius:3px;color:#14532d;white-space:pre-wrap">${esc(p.citation.text)}</blockquote>
-              ${p.citation.url ? `<p style="margin-top:.5rem"><a href="${p.citation.url}" style="color:#16a34a;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+              <blockquote style="margin:0 0 .8rem;padding:.5rem .8rem;background:#f0fdf4;border-radius:3px;color:#14532d;white-space:pre-wrap">${esc(p.citation.text)}</blockquote>
+              ${p.citation.url ? `<p style="margin-bottom:.8rem"><a href="${p.citation.url}" style="color:#16a34a;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+              <div style="margin-top:.6rem;padding:.7rem .9rem;background:#f0fdf4;border-left:3px solid #22c55e;border-radius:4px">
+                <p style="font-weight:700;color:#14532d;margin-bottom:.4rem;font-size:.83rem">❓ ¿Por qué es importante mantener este control?</p>
+                <p style="color:#166534;white-space:pre-wrap;font-size:.81rem">${esc(p.citation.whyFix)}</p>
+              </div>
             </div>
           </details>
         </td>
