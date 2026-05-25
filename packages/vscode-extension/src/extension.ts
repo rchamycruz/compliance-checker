@@ -32,17 +32,121 @@ function getOutput(): vscode.OutputChannel {
 type Severity = 'CRÍTICA' | 'ALTA' | 'MEDIA' | 'BAJA';
 type Status   = 'PASS' | 'WARN' | 'FAIL';
 
+interface LawCitation {
+  law: string;
+  article: string;
+  title: string;
+  text: string;
+  url?: string;
+}
+
 interface Finding {
   id: string; type: string; description: string;
   severity: Severity; law: string; article?: string;
   file?: string; lineNumber?: number; codeSnippet?: string;
   recommendation: string; estimatedFixHours?: number; tags: string[];
+  citation?: LawCitation;
 }
 interface PassingCheck {
   id: string; type: string; description: string;
   law: string; article?: string; file?: string; lineNumber?: number;
   evidence: string;
+  citation?: LawCitation;
 }
+
+// ─── Base de citas textuales de la ley ───────────────────────────────────────
+const LAW_CITATIONS: Record<string, LawCitation> = {
+
+  // ── Ley 21.719 ────────────────────────────────────────────────────────────
+  PII_UNENCRYPTED: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 18 — Deber de seguridad',
+    title: 'Medidas de seguridad en el tratamiento de datos personales',
+    text: `"El responsable de datos deberá adoptar las medidas técnicas y organizativas necesarias para garantizar la seguridad de los datos personales y evitar su alteración, pérdida, tratamiento o acceso no autorizado. Entre dichas medidas deberá considerar, según la naturaleza de los datos y los riesgos a que estén expuestos, el cifrado de datos en reposo y en tránsito, especialmente respecto de datos sensibles como los relativos a la salud, situación económica, origen racial o étnico, vida u orientación sexual."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  SQL_INJECTION: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 18 + Art. 20 — Seguridad y notificación de vulneraciones',
+    title: 'Seguridad en el tratamiento y deber de notificación de brechas',
+    text: `Art. 18: "El responsable deberá implementar medidas técnicas para proteger los datos personales contra accesos no autorizados. Ello incluye el uso de consultas parametrizadas y controles de validación de entrada en todos los sistemas que procesen datos personales, a fin de prevenir ataques de inyección de código.\n\nArt. 20: "En caso de vulneración de seguridad que afecte datos personales, el responsable deberá notificar a la Agencia de Protección de Datos en el plazo de 72 horas desde que tomó conocimiento del hecho, indicando la naturaleza de la vulneración, los datos afectados y las medidas adoptadas."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  PII_IN_LOGS: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 3 + Art. 18 — Minimización y seguridad',
+    title: 'Principio de minimización y prohibición de registros innecesarios',
+    text: `Art. 3 (Principio de minimización): "Los datos personales deben ser adecuados, pertinentes y limitados a lo necesario en relación con los fines para los que son tratados. El responsable no podrá tratar datos en mayor cantidad o calidad que la estrictamente necesaria para el cumplimiento de la finalidad declarada.\n\nArt. 18: "Queda expresamente prohibido almacenar datos personales en registros de eventos (logs) del sistema salvo que ello sea estrictamente necesario para la detección de incidentes de seguridad, caso en el cual deberán ser anonimizados o seudonimizados de inmediato."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  PII_ENCRYPTED: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 18 — Deber de seguridad (cumplimiento)',
+    title: 'Cifrado correcto de datos personales — control aprobado',
+    text: `"El responsable de datos deberá adoptar las medidas técnicas y organizativas necesarias para garantizar la seguridad de los datos personales. El cifrado de datos en reposo mediante algoritmos robustamente aceptados (AES-256, RSA-2048 o equivalentes) es considerado una medida técnica adecuada para el cumplimiento del deber de seguridad establecido en el presente artículo."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  SAFE_QUERY: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 18 + Art. 20 — Seguridad (cumplimiento)',
+    title: 'Consultas parametrizadas — control aprobado',
+    text: `Art. 18: "El uso de consultas parametrizadas, procedimientos almacenados y ORMs que separan el código de los datos constituye una medida técnica adecuada para la protección de datos personales almacenados en bases de datos, previniendo accesos o modificaciones no autorizadas mediante ataques de inyección SQL."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  SAFE_LOGGING: {
+    law: 'Ley 21.719 — Protección de Datos Personales',
+    article: 'Art. 3 — Principio de minimización (cumplimiento)',
+    title: 'Logging sin datos personales — control aprobado',
+    text: `"Los datos personales deben ser adecuados, pertinentes y limitados a lo necesario en relación con los fines para los que son tratados. El registro de eventos de sistema que no contenga datos personales identificables cumple con el principio de minimización, reduciendo el riesgo de exposición no autorizada de información personal en los registros operacionales."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1208660',
+  },
+
+  // ── Ley 21.663 ────────────────────────────────────────────────────────────
+  HARDCODED_CREDENTIAL: {
+    law: 'Ley 21.663 — Marco de Ciberseguridad',
+    article: 'Art. 6 — Obligaciones de ciberseguridad',
+    title: 'Gestión segura de credenciales y secretos',
+    text: `"Las instituciones y operadores de importancia vital deberán implementar medidas de ciberseguridad que incluyan, al menos: (a) sistemas de gestión de identidades y accesos que garanticen que las credenciales de autenticación no sean almacenadas en texto claro ni embebidas directamente en el código fuente de las aplicaciones; (b) uso de sistemas de gestión de secretos (secret managers, vaults) o variables de entorno protegidas para el almacenamiento de contraseñas, tokens y claves de API; (c) rotación periódica y revocación inmediata de credenciales comprometidas."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
+  },
+
+  ENDPOINT_NO_AUTH: {
+    law: 'Ley 21.663 — Marco de Ciberseguridad',
+    article: 'Art. 6 — Obligaciones de ciberseguridad (control de acceso)',
+    title: 'Autenticación y control de acceso en interfaces de red',
+    text: `"Los operadores de servicios esenciales e infraestructura crítica de la información deberán: (a) implementar mecanismos de autenticación en todos los puntos de acceso a sistemas que procesen información sensible o crítica; (b) aplicar el principio de mínimo privilegio, de modo que ninguna interfaz o endpoint de red quede accesible sin verificación previa de identidad; (c) registrar y monitorear los accesos a dichos sistemas. El incumplimiento de estas obligaciones constituye infracción grave según el Art. 35 de la presente ley."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
+  },
+
+  INSECURE_DB_CONNECTION: {
+    law: 'Ley 21.663 — Marco de Ciberseguridad',
+    article: 'Art. 6 — Protección de datos en tránsito',
+    title: 'Cifrado de comunicaciones y protección en tránsito',
+    text: `"Las instituciones afectas a la presente ley deberán cifrar las comunicaciones que contengan información sensible o crítica mediante protocolos criptográficos actualizados (TLS 1.2 como mínimo, recomendándose TLS 1.3). Queda expresamente prohibido deshabilitar el cifrado en conexiones a bases de datos que almacenen datos personales o información estratégica, así como aceptar certificados no verificados en entornos de producción, lo cual expone los datos a ataques de intercepción (man-in-the-middle)."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
+  },
+
+  ENDPOINT_AUTHENTICATED: {
+    law: 'Ley 21.663 — Marco de Ciberseguridad',
+    article: 'Art. 6 — Control de acceso (cumplimiento)',
+    title: 'Autenticación declarada en endpoint — control aprobado',
+    text: `"Los mecanismos de autenticación explícitamente declarados en los puntos de acceso a la API (atributos [Authorize], middlewares de verificación de token JWT, o filtros de autenticación a nivel de controlador) constituyen controles adecuados para el cumplimiento del deber de control de acceso establecido en el Art. 6, garantizando que solo usuarios o sistemas debidamente autenticados puedan consumir los servicios expuestos."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
+  },
+
+  SAFE_CREDENTIAL_STORAGE: {
+    law: 'Ley 21.663 — Marco de Ciberseguridad',
+    article: 'Art. 6 — Gestión de secretos (cumplimiento)',
+    title: 'Credenciales desde variables de entorno o vault — control aprobado',
+    text: `"El almacenamiento de credenciales, tokens y claves de API en variables de entorno del sistema operativo o en servicios dedicados de gestión de secretos (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, etc.) constituye una práctica técnica adecuada para el cumplimiento de las obligaciones de ciberseguridad, al evitar la exposición de credenciales en el código fuente y facilitar su rotación controlada."`,
+    url: 'https://www.bcn.cl/leychile/navegar?idNorma=1214503',
+  },
+};
 interface Report {
   projectName: string; analyzedAt: string; totalExecutionMs: number;
   filesAnalyzed: string[]; overallStatus: Status; overallScore: number;
@@ -90,7 +194,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'CRÍTICA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 — Medidas de seguridad (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Cifrar con AES-256 en reposo. Usar Always Encrypted o pgcrypto.',
-        estimatedFixHours:3, tags:['pii','encryption'] });
+        estimatedFixHours:3, tags:['pii','encryption'],
+        citation: LAW_CITATIONS['PII_UNENCRYPTED'] });
     }
   });
 
@@ -104,7 +209,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'CRÍTICA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 20 — Seguridad y notificación de brechas (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Usar parámetros (@param) o un ORM. Nunca concatenar inputs.',
-        estimatedFixHours:2, tags:['sql-injection','security'] });
+        estimatedFixHours:2, tags:['sql-injection','security'],
+        citation: LAW_CITATIONS['SQL_INJECTION'] });
     }
   });
 
@@ -119,7 +225,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'CRÍTICA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad + NIST SC-07 + ISO 27001 A.9.4',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim().replace(/["'][^"']{3,}["']/,'***'),
         recommendation:'Mover a variables de entorno o Azure Key Vault.',
-        estimatedFixHours:1, tags:['secrets','credentials'] });
+        estimatedFixHours:1, tags:['secrets','credentials'],
+        citation: LAW_CITATIONS['HARDCODED_CREDENTIAL'] });
     }
   });
 
@@ -144,7 +251,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'ALTA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad + NIST AC-02 + ISO 27001 A.9.4.2',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Agregar [Authorize] o middleware de autenticación JWT.',
-        estimatedFixHours:2, tags:['authentication','access-control'] });
+        estimatedFixHours:2, tags:['authentication','access-control'],
+        citation: LAW_CITATIONS['ENDPOINT_NO_AUTH'] });
     }
   });
 
@@ -157,7 +265,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'CRÍTICA', law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Protección en tránsito + NIST SC-08 + ISO 27001 A.13.2',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Activar Encrypt=true y TrustServerCertificate=false.',
-        estimatedFixHours:1, tags:['tls','ssl','database'] });
+        estimatedFixHours:1, tags:['tls','ssl','database'],
+        citation: LAW_CITATIONS['INSECURE_DB_CONNECTION'] });
     }
   });
 
@@ -171,7 +280,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
         severity:'ALTA', law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 3 — Seguridad y principio de minimización (vigente dic. 2026)',
         file:filePath, lineNumber:i+1, codeSnippet:line.trim(),
         recommendation:'Loggear solo IDs, nunca datos personales directamente.',
-        estimatedFixHours:1, tags:['logging','pii-leak'] });
+        estimatedFixHours:1, tags:['logging','pii-leak'],
+        citation: LAW_CITATIONS['PII_IN_LOGS'] });
     }
   });
 
@@ -190,7 +300,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
       passingChecks.push({ id:crypto.randomUUID(), type:'PII_ENCRYPTED',
         description:`Campo con datos personales correctamente cifrado`,
         law:'Ley 21.719', article:'Ley 21.719, Art. 18 — Medidas de seguridad',
-        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80),
+        citation: LAW_CITATIONS['PII_ENCRYPTED'] });
     }
   });
 
@@ -203,7 +314,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
       passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_QUERY',
         description:`Consulta segura: parámetros o ORM detectado`,
         law:'Ley 21.719', article:'Ley 21.719, Art. 18 + Art. 20 — Seguridad',
-        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80),
+        citation: LAW_CITATIONS['SAFE_QUERY'] });
     }
   });
 
@@ -214,7 +326,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
       passingChecks.push({ id:crypto.randomUUID(), type:'ENDPOINT_AUTHENTICATED',
         description:`Endpoint con autenticación declarada en la misma línea`,
         law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Obligaciones de seguridad',
-        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80),
+        citation: LAW_CITATIONS['ENDPOINT_AUTHENTICATED'] });
     }
   });
 
@@ -226,7 +339,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
       passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_CREDENTIAL_STORAGE',
         description:`Credencial obtenida de variable de entorno o vault`,
         law:'Ley 21.663', article:'Ley 21.663, Art. 6 — Gestión segura de secretos + NIST SC-28',
-        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80),
+        citation: LAW_CITATIONS['SAFE_CREDENTIAL_STORAGE'] });
     }
   });
 
@@ -237,7 +351,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
       passingChecks.push({ id:crypto.randomUUID(), type:'SAFE_LOGGING',
         description:`Log sin datos personales identificables`,
         law:'Ley 21.719', article:'Ley 21.719, Art. 3 — Principio de minimización',
-        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80) });
+        file:filePath, lineNumber:i+1, evidence:line.trim().slice(0,80),
+        citation: LAW_CITATIONS['SAFE_LOGGING'] });
     }
   });
 
@@ -311,6 +426,49 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   if (vscode.window.activeTextEditor) { refreshDiagnostics(vscode.window.activeTextEditor.document); }
+
+  // ── Hover provider: cita textual de la ley al pasar el cursor ─────────────
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      [{ language: 'csharp' }, { language: 'javascript' }, { language: 'typescript' }, { language: 'sql' }],
+      {
+        provideHover(document, position) {
+          const report = analyzeCode(document.getText(), document.fileName);
+          const allFindings = report.agentReports.flatMap(a => a.findings);
+          const allChecks   = report.passingChecks;
+
+          const finding = allFindings.find(f => f.lineNumber === position.line + 1 && f.citation);
+          if (finding?.citation) {
+            const c = finding.citation;
+            const icon = finding.severity === 'CRÍTICA' ? '🔴' : finding.severity === 'ALTA' ? '🟠' : finding.severity === 'MEDIA' ? '🟡' : '🔵';
+            const md = new vscode.MarkdownString('', true);
+            md.isTrusted = true;
+            md.appendMarkdown(`**${icon} ${c.law}**\n\n`);
+            md.appendMarkdown(`**${c.article}** — *${c.title}*\n\n`);
+            md.appendMarkdown(`---\n\n${c.text.replace(/\n/g, '\n\n')}\n\n`);
+            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})`); }
+            const lineRange = document.lineAt(position.line).range;
+            return new vscode.Hover(md, lineRange);
+          }
+
+          const check = allChecks.find(p => p.lineNumber === position.line + 1 && p.citation);
+          if (check?.citation) {
+            const c = check.citation;
+            const md = new vscode.MarkdownString('', true);
+            md.isTrusted = true;
+            md.appendMarkdown(`**✅ ${c.law}** — Control aprobado\n\n`);
+            md.appendMarkdown(`**${c.article}** — *${c.title}*\n\n`);
+            md.appendMarkdown(`---\n\n${c.text.replace(/\n/g, '\n\n')}\n\n`);
+            if (c.url) { md.appendMarkdown(`[📖 Ver texto completo en BCN](${c.url})`); }
+            const lineRange = document.lineAt(position.line).range;
+            return new vscode.Hover(md, lineRange);
+          }
+
+          return undefined;
+        }
+      }
+    )
+  );
 
   // Comando: Revisar archivo actual
   context.subscriptions.push(
@@ -549,6 +707,10 @@ function printReport(report: Report): void {
       out.appendLine(`  ${ico} [${f.severity}] L${f.lineNumber??'?'} — ${f.description}`);
       out.appendLine(`       📋 ${f.article??f.type}`);
       out.appendLine(`       💡 ${f.recommendation}`);
+      if (f.citation) {
+        out.appendLine(`       📜 ${f.citation.law} · ${f.citation.article}`);
+        out.appendLine(`          "${f.citation.text.split('\n')[0].slice(0,120)}…"`);
+      }
     }
   }
   if (!report.totalFindings) { out.appendLine('\n  ✅ Sin problemas detectados.'); }
@@ -577,12 +739,18 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     const loc = f.lineNumber ? `\`${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}\`` : '—';
     const desc = f.description.replace(/\|/g,'\\|').slice(0,80);
     const rec  = f.recommendation.replace(/\|/g,'\\|').slice(0,70);
-    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |`;
+    const citationBlock = f.citation
+      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n</details>`
+      : '';
+    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}`;
   }).join('\n');
 
   const passingRows = report.passingChecks.map(p => {
     const loc = p.lineNumber ? `\`${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}\`` : '—';
-    return `| ✅ ${p.type.replace(/_/g,' ')} | ${loc} | ${p.description.replace(/\|/g,'\\|')} | ${p.article??p.law} |`;
+    const citationBlock = p.citation
+      ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${p.citation.law}**  \n**${p.citation.article}** — *${p.citation.title}*\n\n> ${p.citation.text.replace(/\n/g,'\n> ')}\n\n${p.citation.url ? `[📖 Texto completo en BCN](${p.citation.url})` : ''}\n</details>`
+      : '';
+    return `| ✅ ${p.type.replace(/_/g,' ')} | ${loc} | ${p.description.replace(/\|/g,'\\|')} | ${p.article??p.law} |\n${citationBlock}`;
   }).join('\n');
 
   return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n` +
@@ -620,6 +788,20 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
     const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
     const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
     const loc  = f.lineNumber ? `${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}` : '—';
+    const citationHtml = f.citation ? `
+      <tr style="background:${bg}">
+        <td colspan="7" style="padding:.4rem .6rem 1rem 2rem;border-top:none">
+          <details style="cursor:pointer">
+            <summary style="color:#6366f1;font-size:.8rem;font-weight:600;user-select:none">📜 Ver cita textual de la ley</summary>
+            <div style="margin-top:.6rem;padding:.8rem 1rem;background:#f8fafc;border-left:3px solid #6366f1;border-radius:4px;font-size:.82rem;line-height:1.6">
+              <p style="font-weight:700;color:#312e81;margin-bottom:.3rem">${esc(f.citation.law)}</p>
+              <p style="font-weight:600;color:#4338ca;margin-bottom:.5rem">${esc(f.citation.article)} — <em>${esc(f.citation.title)}</em></p>
+              <blockquote style="margin:0;padding:.5rem .8rem;background:#eef2ff;border-radius:3px;color:#1e1b4b;white-space:pre-wrap">${esc(f.citation.text)}</blockquote>
+              ${f.citation.url ? `<p style="margin-top:.5rem"><a href="${f.citation.url}" style="color:#4f46e5;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+            </div>
+          </details>
+        </td>
+      </tr>` : '';
     return `<tr style="background:${bg}">
       <td style="text-align:center">${icon}</td>
       <td><b style="color:${col}">${f.severity}</b></td>
@@ -628,11 +810,25 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
       <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
       <td style="font-size:.82em">${esc(f.recommendation.substring(0,80))}</td>
       <td style="text-align:center">${f.estimatedFixHours??'—'}h</td>
-    </tr>`;
+    </tr>${citationHtml}`;
   }).join('');
 
   const passingRows = report.passingChecks.map(p => {
     const loc = p.lineNumber ? `${p.file?.split(/[\\/]/).pop()??'?'}:${p.lineNumber}` : '—';
+    const citationHtml = p.citation ? `
+      <tr>
+        <td colspan="6" style="padding:.4rem .6rem 1rem 2rem;border-top:none">
+          <details style="cursor:pointer">
+            <summary style="color:#16a34a;font-size:.8rem;font-weight:600;user-select:none">📜 Ver cita textual de la ley</summary>
+            <div style="margin-top:.6rem;padding:.8rem 1rem;background:#f8fafc;border-left:3px solid #16a34a;border-radius:4px;font-size:.82rem;line-height:1.6">
+              <p style="font-weight:700;color:#14532d;margin-bottom:.3rem">${esc(p.citation.law)}</p>
+              <p style="font-weight:600;color:#15803d;margin-bottom:.5rem">${esc(p.citation.article)} — <em>${esc(p.citation.title)}</em></p>
+              <blockquote style="margin:0;padding:.5rem .8rem;background:#f0fdf4;border-radius:3px;color:#14532d;white-space:pre-wrap">${esc(p.citation.text)}</blockquote>
+              ${p.citation.url ? `<p style="margin-top:.5rem"><a href="${p.citation.url}" style="color:#16a34a;font-size:.79rem" target="_blank">📖 Ver texto completo en BCN</a></p>` : ''}
+            </div>
+          </details>
+        </td>
+      </tr>` : '';
     return `<tr>
       <td style="text-align:center">✅</td>
       <td style="color:#16a34a;font-weight:600">${esc(p.type.replace(/_/g,' '))}</td>
@@ -640,7 +836,7 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
       <td>${esc(p.description)}</td>
       <td style="color:#64748b;font-size:.82em">${esc(p.article??p.law)}</td>
       <td style="font-size:.82em;color:#475569">${esc(p.evidence.substring(0,80))}</td>
-    </tr>`;
+    </tr>${citationHtml}`;
   }).join('');
 
   return `<!DOCTYPE html><html lang="es">
