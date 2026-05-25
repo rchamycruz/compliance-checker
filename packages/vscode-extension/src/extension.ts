@@ -446,6 +446,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     seen.add(k); return true;
   });
 
+  const SEVERITY_ORDER: Record<Severity, number> = { 'CRÍTICA': 0, 'ALTA': 1, 'MEDIA': 2, 'BAJA': 3 };
+
   return {
     projectName: filePath, analyzedAt: new Date().toISOString(),
     totalExecutionMs: Date.now()-t0, filesAnalyzed: [filePath],
@@ -456,8 +458,8 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     generatedBy: opts?.generatedBy ?? '',
     passingChecks: uniquePassing,
     agentReports: [
-      { agentName:'DPA Agent (Ley 21.719)', law:'Ley 21.719', findings:findings.filter(f=>f.law==='Ley 21.719') },
-      { agentName:'CSA Agent (Ley 21.663)', law:'Ley 21.663', findings:findings.filter(f=>f.law==='Ley 21.663') },
+      { agentName:'DPA Agent (Ley 21.719)', law:'Ley 21.719', findings:findings.filter(f=>f.law==='Ley 21.719').sort((a,b)=>SEVERITY_ORDER[a.severity]-SEVERITY_ORDER[b.severity]) },
+      { agentName:'CSA Agent (Ley 21.663)', law:'Ley 21.663', findings:findings.filter(f=>f.law==='Ley 21.663').sort((a,b)=>SEVERITY_ORDER[a.severity]-SEVERITY_ORDER[b.severity]) },
     ],
   };
 }
@@ -721,7 +723,12 @@ export function activate(context: vscode.ExtensionContext): void {
           }
 
           if (!consolidatedReport) { return; }
-          const allFindings = consolidatedReport.agentReports.flatMap(a => a.findings);
+          const allFindings = consolidatedReport.agentReports
+            .flatMap(a => a.findings)
+            .sort((a,b) => {
+              const o: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
+              return (o[a.severity]??9) - (o[b.severity]??9);
+            });
           const savedPaths: string[] = [];
 
           // ── Escribir archivos según formato ───────────────────────────────
@@ -826,8 +833,10 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     : report.overallStatus==='WARN' ? '## ⚠️ Estado: REQUIERE REVISIÓN' : '## ✅ Estado: APROBADO';
   const totalHours = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
   const icons: Record<Severity,'🔴'|'🟠'|'🟡'|'🔵'> = { 'CRÍTICA':'🔴','ALTA':'🟠','MEDIA':'🟡','BAJA':'🔵' };
+  const sevOrder: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
+  const sorted = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
 
-  const rows = allFindings.map(f => {
+  const rows = sorted.map(f => {
     const loc = f.lineNumber ? `\`${f.file?.split(/[\\/]/).pop()??'?'}:${f.lineNumber}\`` : '—';
     const desc = f.description.replace(/\|/g,'\\|').slice(0,80);
     const rec  = f.recommendation.replace(/\|/g,'\\|').slice(0,70);
@@ -874,8 +883,10 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
   const statusLabel = report.overallStatus==='FAIL'?'❌ MERGE BLOQUEADO':report.overallStatus==='WARN'?'⚠️ REQUIERE REVISIÓN':'✅ APROBADO';
   const totalHours  = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
   const esc = (s:string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const sevOrder: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
+  const sortedFindings = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
 
-  const rows = allFindings.map(f => {
+  const rows = sortedFindings.map(f => {
     const icon = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
     const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
     const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
