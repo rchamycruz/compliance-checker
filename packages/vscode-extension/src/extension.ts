@@ -2,6 +2,7 @@
 // v0.2.0: análisis real, sin memory leaks, sin stubs hardcodeados
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as vscode from 'vscode';
 
 /** Sube desde startDir hasta encontrar la raíz del proyecto (.git / package.json / .sln). */
@@ -41,12 +42,29 @@ interface Report {
   projectName: string; analyzedAt: string; totalExecutionMs: number;
   filesAnalyzed: string[]; overallStatus: Status; overallScore: number;
   totalFindings: number; criticalFindings: number; highFindings: number;
-  blockMerge: boolean; recommendations: string[];
+  blockMerge: boolean; recommendations: string[]; generatedBy: string;
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
 }
 
+// ─── Identificación del usuario que genera el reporte ─────────────────────────
+function getGeneratedBy(): string {
+  try {
+    const gitName = require('child_process')
+      .execSync('git config user.name', { timeout: 1500 })
+      .toString().trim();
+    if (gitName) { return gitName; }
+  } catch { /* git no disponible */ }
+  return (
+    process.env['GIT_AUTHOR_NAME'] ||
+    process.env['USERNAME'] ||
+    process.env['USER'] ||
+    os.userInfo().username ||
+    'desconocido'
+  );
+}
+
 // ─── Motor de análisis (inline, sin dependencias externas) ───────────────────
-function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?: boolean }): Report {
+function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?: boolean; generatedBy?: string }): Report {
   const t0 = Date.now();
   const lines = code.split('\n');
   const findings: Finding[] = [];
@@ -163,6 +181,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     totalFindings: findings.length, criticalFindings: crit, highFindings: high,
     blockMerge: crit>0,
     recommendations: [...new Map(findings.map(f=>[f.type,f.recommendation])).values()].slice(0,5),
+    generatedBy: opts?.generatedBy ?? '',
     agentReports: [
       { agentName:'DPA Agent (Ley 21.719)', law:'Ley 21.719', findings:findings.filter(f=>f.law==='Ley 21.719') },
       { agentName:'CSA Agent (Ley 21.663)', law:'Ley 21.663', findings:findings.filter(f=>f.law==='Ley 21.663') },
@@ -293,6 +312,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const ts = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
       const reportsDir = path.join(folder, 'compliance-reports');
       if (!fs.existsSync(reportsDir)) { fs.mkdirSync(reportsDir, { recursive: true }); }
+      const generatedBy = getGeneratedBy();
 
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: false },
@@ -303,7 +323,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (choice === '📄 Archivo actual') {
             const ed = vscode.window.activeTextEditor;
             if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
-            consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName);
+            consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName, { generatedBy });
           } else {
             // Workspace: analizar todos los archivos
             progress.report({ message: 'Buscando archivos...' });
@@ -365,6 +385,7 @@ export function activate(context: vscode.ExtensionContext): void {
               highFindings: totalHigh,
               blockMerge: totalCrit > 0,
               recommendations: [],
+              generatedBy,
               agentReports: allAgentReports,
             };
           }
@@ -475,7 +496,8 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
   }).join('\n');
 
   return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n` +
-    `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}\n\n---\n\n` +
+    `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}` +
+    (report.generatedBy ? `  **Generado por:** ${report.generatedBy}` : '') + `\n\n---\n\n` +
     `| Métrica | Valor |\n|---|---|\n` +
     `| Score | ${report.overallScore}/100 |\n` +
     `| 🔴 CRÍTICA | ${report.criticalFindings} |\n` +
@@ -531,7 +553,7 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 </style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem">
   <div><h1>🔍 Syntaxis Compliance Report</h1>
-  <p style="color:#64748b;margin-top:.3rem">${esc(report.projectName)} · ${report.analyzedAt}</p></div>
+  <p style="color:#64748b;margin-top:.3rem">${esc(report.projectName)} · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</p></div>
   <span class="badge">${statusLabel}</span>
 </div>
 <div class="cards">
@@ -545,6 +567,6 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 <table><thead><tr>
   <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
 </tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
-<footer>Syntaxis Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}</footer>
+<footer>Syntaxis Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}</footer>
 </body></html>`;
 }
