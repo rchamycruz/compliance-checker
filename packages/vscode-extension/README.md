@@ -2,10 +2,13 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.2.0-blue)](https://github.com/rchamycruz/compliance-checker)
+[![Version](https://img.shields.io/badge/versión-0.5.0-blue)](https://github.com/rchamycruz/compliance-checker)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.60.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
+[![Syntaxis Spa](https://img.shields.io/badge/Syntaxis%20Spa-syntaxis.cl-6366f1)](https://www.syntaxis.cl)
+
+Desarrollado por **[Syntaxis Spa](https://www.syntaxis.cl)** — Ingeniería de software para el cumplimiento normativo chileno.
 
 ---
 
@@ -187,6 +190,17 @@ code .
 
 ## Changelog
 
+### v0.5.0
+- ✅ Fix: hallazgos ordenados por severidad (CRÍTICA → ALTA → MEDIA → BAJA) en todos los reportes
+
+### v0.4.0
+- ✅ Logo oficial de Syntaxis Spa en la extensión
+
+### v0.3.0
+- ✅ Citas textuales de la ley en cada hallazgo (expandibles con clic)
+- ✅ Sección "¿Por qué implementar esta corrección?" con contexto legal
+- ✅ Fix: instalación sin bloqueo (bundling con esbuild, sin dependencias runtime)
+
 ### v0.2.0
 - ✅ Análisis en tiempo real con debounce (800ms)
 - ✅ Motor de análisis inline (sin dependencias externas en runtime)
@@ -208,5 +222,13 @@ MIT — Ver [LICENSE](LICENSE) para más detalles.
 ## Autor
 
 **Rodrigo Chamy** · [rchamycruz](https://github.com/rchamycruz)
+
+---
+
+## Acerca de Syntaxis Spa
+
+**[Syntaxis Spa](https://www.syntaxis.cl)** es una empresa chilena de ingeniería de software especializada en cumplimiento normativo, seguridad y desarrollo de soluciones tecnológicas para el mercado latinoamericano.
+
+🌐 [www.syntaxis.cl](https://www.syntaxis.cl)
 
 ¿Tienes problemas o sugerencias? Abre un [issue](https://github.com/rchamycruz/compliance-checker/issues) o inicia una [discusión](https://github.com/rchamycruz/compliance-checker/discussions).
