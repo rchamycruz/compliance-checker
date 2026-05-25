@@ -945,10 +945,16 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
   const sevOrder: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
   const sortedFindings = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
 
+  const sevAnchorIds: Record<string,string> = { 'CRÍTICA':'hallazgos-critica','ALTA':'hallazgos-alta','MEDIA':'hallazgos-media','BAJA':'hallazgos-baja' };
+  let lastSev = '';
   const rows = sortedFindings.map(f => {
     const icon = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
     const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
     const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
+    const anchorRow = f.severity !== lastSev
+      ? `<tr id="${sevAnchorIds[f.severity]??''}"><td colspan="7" style="padding:0;height:0;border:none"></td></tr>`
+      : '';
+    lastSev = f.severity;
     const fileName = f.file?.split(/[\\/]/).pop() ?? '?';
     const vscodePath = f.file && f.lineNumber
       ? `vscode://file/${f.file.replace(/\\/g,'/')}:${f.lineNumber}:1`
@@ -976,7 +982,7 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
           </details>
         </td>
       </tr>` : '';
-    return `<tr style="background:${bg}">
+    return `${anchorRow}<tr style="background:${bg}">
       <td style="text-align:center">${icon}</td>
       <td><b style="color:${col}">${f.severity}</b></td>
       <td>${loc}</td>
@@ -1033,8 +1039,19 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
 h1{font-size:1.6rem;font-weight:800}h2{margin:1.4rem 0 .7rem;font-size:1.1rem;color:#475569}
 .badge{display:inline-block;padding:.3rem .9rem;border-radius:999px;color:#fff;font-weight:700;font-size:.9rem;background:${statusColor}}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:1rem;margin:1.2rem 0 2rem}
-.card{background:#fff;border-radius:10px;padding:1rem;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+.card{background:#fff;border-radius:10px;padding:1rem;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.07);transition:box-shadow .15s}
+.card.clickable{cursor:pointer;text-decoration:none;color:inherit;display:block}
+.card.clickable:hover{box-shadow:0 4px 14px rgba(0,0,0,.13);transform:translateY(-1px)}
 .card .v{font-size:2rem;font-weight:800}.card .l{font-size:.8rem;color:#64748b}
+/* Tooltip del score */
+.score-wrap{position:relative;display:inline-block}
+.score-help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:#e2e8f0;color:#64748b;font-size:.65rem;font-weight:700;cursor:help;margin-left:4px;vertical-align:middle;line-height:1}
+.score-tooltip{visibility:hidden;opacity:0;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);width:270px;background:#1e293b;color:#f8fafc;border-radius:10px;padding:.8rem 1rem;font-size:.78rem;line-height:1.55;z-index:100;pointer-events:none;transition:opacity .18s;box-shadow:0 8px 24px rgba(0,0,0,.22)}
+.score-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#1e293b}
+.score-wrap:hover .score-tooltip{visibility:visible;opacity:1}
+.score-tooltip table{width:100%;border-collapse:collapse;margin-top:.5rem}
+.score-tooltip td{padding:.15rem .3rem;color:#cbd5e1;font-size:.75rem}
+.score-tooltip td:first-child{font-weight:600;color:#f1f5f9}
 table{width:100%;border-collapse:collapse;font-size:.84rem}
 th{background:#f1f5f9;padding:.5rem .6rem;text-align:left;font-weight:600;color:#475569}
 td{padding:.45rem .6rem;border-top:1px solid #f1f5f9;vertical-align:top}
@@ -1052,19 +1069,37 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
   <span class="badge">${statusLabel}</span>
 </div>
 <div class="cards">
-  <div class="card"><div class="v" style="color:${report.overallScore>=70?'#16a34a':report.overallScore>=40?'#ea580c':'#dc2626'}">${report.overallScore}</div><div class="l">Score /100</div></div>
-  <div class="card"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">🔴 CRÍTICA</div></div>
-  <div class="card"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">🟠 ALTA</div></div>
-  <div class="card"><div class="v" style="color:#ca8a04">${report.mediumFindings??0}</div><div class="l">🟡 MEDIA</div></div>
-  <div class="card"><div class="v" style="color:#2563eb">${report.lowFindings??0}</div><div class="l">🔵 BAJA</div></div>
-  <div class="card"><div class="v" style="color:#16a34a">${report.passingChecks.length}</div><div class="l">✅ Controles OK</div></div>
+  <div class="card">
+    <div class="v score-wrap" style="color:${report.overallScore>=70?'#16a34a':report.overallScore>=40?'#ea580c':'#dc2626'}">
+      ${report.overallScore}
+      <span class="score-help" title="¿Cómo se calcula?">?
+        <span class="score-tooltip">
+          <strong style="color:#fff;font-size:.82rem">¿Cómo se calcula el Score?</strong>
+          <p style="margin:.4rem 0 .2rem;color:#94a3b8">Parte en 100 y se descuenta según hallazgos. Cada severidad tiene un techo para que el score nunca colapse a 0 por un solo tipo de problema.</p>
+          <table>
+            <tr><td>🔴 CRÍTICA</td><td>−20 pts c/u &nbsp;(tope −60)</td></tr>
+            <tr><td>🟠 ALTA</td><td>−8 pts c/u &nbsp;(tope −20)</td></tr>
+            <tr><td>🟡 MEDIA</td><td>−4 pts c/u &nbsp;(tope −10)</td></tr>
+            <tr><td>🔵 BAJA</td><td>−2 pts c/u &nbsp;(tope −5)</td></tr>
+          </table>
+          <p style="margin-top:.5rem;color:#94a3b8">Penalización máxima total: −95 pts</p>
+        </span>
+      </span>
+    </div>
+    <div class="l">Score /100</div>
+  </div>
+  <a href="#hallazgos-critica" class="card clickable"><div class="v" style="color:#dc2626">${report.criticalFindings}</div><div class="l">🔴 CRÍTICA</div></a>
+  <a href="#hallazgos-alta" class="card clickable"><div class="v" style="color:#ea580c">${report.highFindings}</div><div class="l">🟠 ALTA</div></a>
+  <a href="#hallazgos-media" class="card clickable"><div class="v" style="color:#ca8a04">${report.mediumFindings??0}</div><div class="l">🟡 MEDIA</div></a>
+  <a href="#hallazgos-baja" class="card clickable"><div class="v" style="color:#2563eb">${report.lowFindings??0}</div><div class="l">🔵 BAJA</div></a>
+  <a href="#controles" class="card clickable"><div class="v" style="color:#16a34a">${report.passingChecks.length}</div><div class="l">✅ Controles OK</div></a>
   <div class="card"><div class="v">${totalHours}</div><div class="l">Horas fix</div></div>
 </div>
-<h2>📊 Hallazgos detallados</h2>
+<h2 id="hallazgos">📊 Hallazgos detallados</h2>
 <table><thead><tr>
   <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
 </tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
-<h2>✅ Controles que cumplen</h2>
+<h2 id="controles">✅ Controles que cumplen</h2>
 <table class="passing-table"><thead><tr>
   <th></th><th>Control</th><th>Ubicación</th><th>Descripción</th><th>Artículo</th><th>Evidencia</th>
 </tr></thead><tbody>${passingRows||`<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#64748b">No se detectaron controles en este análisis</td></tr>`}</tbody></table>
