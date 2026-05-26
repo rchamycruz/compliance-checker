@@ -156,8 +156,20 @@ npm run compile
 cd packages/vscode-extension
 npm run compile
 npm run package
-# → syntaxis-compliance-checker-0.8.0.vsix
+# → syntaxis-compliance-checker-0.11.0.vsix
 ```
+
+## 📋 Changelog
+
+### v0.11.0
+- 🔴 **Fix crítico**: `Revisar workspace completo` ahora respeta el modo IA (antes siempre usaba REGEX)
+- 🔴 **Fix crítico**: errores de proveedor IA propagados al usuario con finding `AI_PROVIDER_ERROR`
+- 🟠 **Fix**: score unificado entre modo estático e IA (`calculateScore()` con caps)
+- 🟠 **Fix**: deep copy en merge de `agentReports` en workspace scan
+- 🟡 **Fix**: `passingChecks` vacío en modo IA — nueva función `detectPassingChecks()`
+- 🟡 **Fix**: timestamps UTC → hora local en reportes IA
+- 🟡 **Nuevo**: badge de modo en reportes HTML y Markdown (`🤖 IA` / `🔎 Estático`)
+- 🔵 **Fix**: double-dispose de `diagnosticCollection`
 
 ## 🤝 Contribuir
 

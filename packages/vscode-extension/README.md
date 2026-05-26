@@ -2,7 +2,7 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.10.1-blue)](https://github.com/rchamycruz/compliance-checker)
+[![Version](https://img.shields.io/badge/versión-0.11.0-blue)](https://github.com/rchamycruz/compliance-checker)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.93.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
@@ -56,10 +56,10 @@ npm run compile
 
 # 3. Empaquetar
 npm run package
-# Genera: syntaxis-compliance-checker-0.10.1.vsix
+# Genera: syntaxis-compliance-checker-0.11.0.vsix
 
 # 4. Instalar en VS Code
-code --install-extension syntaxis-compliance-checker-0.10.1.vsix
+code --install-extension syntaxis-compliance-checker-0.11.0.vsix
 ```
 
 ### Opción B — Desde la UI de VS Code
@@ -235,6 +235,16 @@ code .           # F5 para depurar
 ---
 
 ## Changelog
+
+### v0.11.0
+- 🔴 **Fix crítico**: `Revisar workspace completo` ahora respeta el modo IA — antes **siempre usaba REGEX** sin importar la configuración `syntaxis.analysisMode`; ahora llama a los agentes LLM por archivo cuando el modo es `ai`
+- 🔴 **Fix crítico**: errores de proveedor IA ya no son silenciosos — si la API falla se muestra un warning visible al usuario y se genera un finding `AI_PROVIDER_ERROR` en el reporte
+- 🟠 **Fix**: score de compliance inconsistente entre modo estático e IA — unificado en función `calculateScore()` con caps por severidad (mismo cálculo en ambos motores)
+- 🟠 **Fix**: shallow copy en merge de `agentReports` en workspace scan — se mutaban los findings del reporte original; corregido a deep copy `{ ...ar, findings: [...ar.findings] }`
+- 🟡 **Fix**: sección "Controles OK" siempre vacía en modo IA — nueva función `detectPassingChecks()` que detecta controles positivos en paralelo al análisis IA
+- 🟡 **Fix**: timestamps UTC en reportes IA — corregido a hora local del sistema (`localISOString()`)
+- 🟡 **Nuevo**: badge de modo de análisis (`🤖 Análisis con IA` / `🔎 Análisis Estático`) visible en la cabecera del reporte HTML y Markdown
+- 🔵 **Fix**: `diagnosticCollection` registrado dos veces en `activate()` (double-dispose); eliminada la duplicación
 
 ### v0.10.1
 - 🔧 **Fix**: `Generar reporte → Workspace completo` ahora usa el modo IA cuando `syntaxis.analysisMode` es `ai` (antes siempre usaba REGEX independiente de la configuración)
