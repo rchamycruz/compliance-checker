@@ -5,23 +5,34 @@
 import * as vscode from 'vscode';
 import { SettingsManager } from './settings-manager.js';
 
-interface Finding {
+export interface AILawCitation {
+  law: string;      // ej: "Ley 21.719 — Protección de Datos Personales"
+  article: string;  // ej: "Art. 18 — Deber de seguridad"
+  title: string;    // ej: "Medidas de seguridad en el tratamiento de datos personales"
+  text: string;     // Cita textual del artículo (generada por la IA a partir de los textos del prompt)
+  whyFix: string;   // Explicación contextual generada por la IA: impacto legal + consecuencias
+  url?: string;     // URL al texto oficial en BCN (estático, según la ley)
+}
+
+export interface AIFinding {
   id: string; type: string; description: string;
   severity: 'CRÍTICA' | 'ALTA' | 'MEDIA' | 'BAJA';
   law: string; article?: string;
   file?: string; lineNumber?: number; codeSnippet?: string;
   recommendation: string; estimatedFixHours?: number; tags: string[];
+  citation?: AILawCitation;   // Generado por la IA
+  suggestedPrompt?: string;   // Prompt contextualizado generado por la IA
 }
 
-interface AgentReport {
+export interface AIAgentReport {
   agentName: string; law: string; executedAt: string; executionMs: number;
   totalFindings: number; criticalFindings: number; highFindings: number;
   mediumFindings: number; lowFindings: number;
-  status: 'PASS' | 'WARN' | 'FAIL'; findings: Finding[]; summary: string;
+  status: 'PASS' | 'WARN' | 'FAIL'; findings: AIFinding[]; summary: string;
 }
 
-interface AIAnalysisResult {
-  agentReports: AgentReport[];
+export interface AIAnalysisResult {
+  agentReports: AIAgentReport[];
   totalFindings: number;
   criticalFindings: number;
   highFindings: number;
@@ -29,45 +40,61 @@ interface AIAnalysisResult {
   overallScore: number;
 }
 
-// ─── Prompts de cada agente (importados inline para evitar dependencias de src/) ─
+// ─── Prompts de cada agente — incluyen textos de ley para citas precisas ─────
 const DPA_SYSTEM_PROMPT = `Eres un agente de cumplimiento legal especializado en la Ley 21.719 de Protección de Datos Personales de Chile.
 
-## Artículos aplicables
-- Art. 3 (Minimización): Solo tratar datos estrictamente necesarios. Detecta logs con PII o campos redundantes.
-- Art. 4 (Consentimiento): Creación de usuarios/registros debe registrar consentimiento explícito.
-- Art. 7 (Supresión): Controladores con datos de usuarios deben exponer endpoint DELETE.
-- Art. 9 (Portabilidad): Debe existir endpoint de exportación de datos del titular.
-- Art. 18 (Seguridad): Campos PII (email, RUT, teléfono, tarjeta) cifrados. No MD5/SHA1 para passwords.
-- Art. 20 (Notificación): SQL Injection que exponga datos personales activa deber de notificación en 72h.
+## Textos de la Ley 21.719 (usa estos textos para las citas)
 
-## Instrucciones
-1. Analiza el código línea por línea
-2. Detecta TODAS las violaciones con rigor de auditoría formal
-3. Responde ÚNICAMENTE con un JSON array con este esquema por item:
-{"id":"uuid","type":"TIPO","description":"descripción","severity":"CRÍTICA|ALTA|MEDIA|BAJA","law":"Ley 21.719","article":"Art. X","lineNumber":N,"codeSnippet":"fragmento","recommendation":"acción concreta","estimatedFixHours":N,"tags":["tag"]}
-Si no hay violaciones responde: []
-NO incluyas markdown ni texto extra.`;
+**Art. 3 — Principio de minimización de datos**: "El responsable deberá tratar únicamente los datos personales que sean adecuados, pertinentes y limitados a lo necesario en relación con los fines para los que son tratados. No podrá recopilarse datos en exceso o que no guarden relación directa con la finalidad declarada."
+
+**Art. 4 — Consentimiento**: "El tratamiento de datos personales requerirá el consentimiento del titular, que habrá de ser libre, informado, específico e inequívoco. El consentimiento puede otorgarse por escrito, en forma oral o mediante conducta inequívoca, debiendo el responsable poder acreditarlo en todo momento."
+
+**Art. 7 — Derecho de supresión**: "El titular tiene derecho a solicitar al responsable la supresión de sus datos personales cuando: a) ya no sean necesarios para la finalidad con que fueron recopilados; b) se revoque el consentimiento y no exista otro fundamento legal; c) el tratamiento sea ilícito; d) deban suprimirse para cumplir una obligación legal. El responsable deberá suprimir los datos sin dilación injustificada."
+
+**Art. 9 — Derecho de portabilidad**: "El titular tiene derecho a recibir los datos personales que le incumban en un formato estructurado, de uso común y lectura mecánica, y a transmitirlos a otro responsable sin que el responsable al que se los hubiere facilitado lo pueda impedir, cuando el tratamiento esté basado en el consentimiento o en un contrato."
+
+**Art. 18 — Deber de seguridad**: "El responsable de datos deberá adoptar las medidas técnicas y organizativas necesarias para garantizar la seguridad de los datos personales y evitar su alteración, pérdida, tratamiento o acceso no autorizado. Entre dichas medidas deberá considerar, según la naturaleza de los datos y los riesgos a que estén expuestos, el cifrado de datos en reposo y en tránsito, especialmente respecto de datos sensibles."
+
+**Art. 20 — Notificación de vulneraciones**: "Cuando se produzca una vulneración de seguridad que afecte a datos personales, el responsable deberá notificar a la Agencia de Protección de Datos Personales y a los titulares afectados dentro del plazo de setenta y dos horas contado desde que haya tenido conocimiento del hecho, indicando la naturaleza de la vulneración, las categorías y número aproximado de titulares y registros afectados, y las medidas adoptadas o propuestas."
+
+## Instrucciones de análisis
+1. Analiza el código línea por línea con rigor de auditoría legal formal.
+2. Detecta TODAS las violaciones; no omitas ninguna.
+3. Para cada hallazgo incluye el campo "citation" con el texto relevante citado TEXTUALMENTE de los artículos anteriores.
+4. En "citation.whyFix" genera 2-3 párrafos ESPECÍFICOS al hallazgo: qué riesgo concreto representa este código, las consecuencias legales (multas en UTM, notificación pública), y el beneficio de corregirlo.
+5. En "suggestedPrompt" genera un prompt detallado y contextualizado con el snippet y ubicación exactos para que el desarrollador lo use directamente con una IA y obtenga el código corregido.
+6. Responde ÚNICAMENTE con un JSON array. NO incluyas markdown, texto previo ni posterior.
+
+## Esquema JSON por hallazgo (incluir TODOS los campos):
+{"id":"uuid-unico","type":"TIPO_EN_MAYUSCULAS","description":"descripción clara del problema","severity":"CRÍTICA|ALTA|MEDIA|BAJA","law":"Ley 21.719","article":"Art. X","lineNumber":N,"codeSnippet":"fragmento relevante (sin credenciales)","recommendation":"acción concreta a tomar","estimatedFixHours":N,"tags":["tag1","tag2"],"citation":{"law":"Ley 21.719 — Protección de Datos Personales","article":"Art. X — Nombre del artículo","title":"Título descriptivo del artículo","text":"cita textual exacta del artículo provisto arriba","whyFix":"párrafo 1: qué riesgo concreto representa este código en este archivo específico.\\n\\npárrafo 2: consecuencias legales: multas de hasta X UTM, obligación de notificar a titulares, responsabilidad civil.\\n\\npárrafo 3: por qué la corrección propuesta elimina el riesgo y cumple con la ley.","url":"https://www.bcn.cl/leychile/navegar?idNorma=1208660"},"suggestedPrompt":"Tengo un problema de cumplimiento legal (Ley 21.719) en [archivo]:[línea]...\\n\\n[contexto específico del código con snippet]\\n\\nPor favor: 1) muéstrame el código corregido completo. 2) Explica los cambios para cumplir con Art. X. 3) Indica si hay patrones similares a revisar."}
+
+Si no hay violaciones responde: []`;
 
 const CSA_SYSTEM_PROMPT = `Eres un agente de ciberseguridad especializado en la Ley 21.663 Marco de Ciberseguridad de Chile y OWASP.
 
-## Artículos aplicables
-- Art. 6 (Credenciales): Detecta passwords, API keys, tokens hardcodeados en código fuente.
-- Art. 6 (Auth): Endpoints HTTP sin autenticación ([Authorize], requireAuth, verifyToken).
-- Art. 6 (Criptografía): Uso de MD5, SHA1, DES, RC4.
-- Art. 6 (TLS): Encrypt=false, TrustServerCertificate=true, sslmode=disable en connection strings.
-- Art. 6 (CORS): AllowAnyOrigin(), origins:["*"], Access-Control-Allow-Origin: *.
-- Art. 6 (Rate limit): Endpoints de login/auth sin rate limiting.
+## Textos de la Ley 21.663 (usa estos textos para las citas)
 
-## Instrucciones
-1. Revisa el código con mentalidad de pentester + auditor legal
-2. Al reportar credenciales, usa "***REDACTED***" en el snippet
-3. Si el controlador completo tiene [Authorize] a nivel de clase, los endpoints individuales están cubiertos
-4. Responde ÚNICAMENTE con un JSON array con este esquema por item:
-{"id":"uuid","type":"TIPO","description":"descripción","severity":"CRÍTICA|ALTA|MEDIA|BAJA","law":"Ley 21.663","article":"Art. X","lineNumber":N,"codeSnippet":"fragmento","recommendation":"acción concreta","estimatedFixHours":N,"tags":["tag"]}
-Si no hay vulnerabilidades responde: []
-NO incluyas markdown ni texto extra.`;
+**Art. 6 — Deberes de seguridad de los operadores**: "Los operadores de importancia vital y los prestadores de servicios esenciales deberán implementar un sistema de gestión de seguridad de la información que contemple, entre otras medidas: la gestión de identidades y control de accesos basado en el principio de mínimo privilegio; la autenticación robusta en todos los puntos de acceso a sistemas críticos; el uso de criptografía para la protección de datos en tránsito y en reposo, empleando algoritmos vigentes y aprobados (se prohíbe el uso de MD5, SHA-1, DES y RC4 para propósitos de seguridad); la gestión de credenciales y prohibición expresa de credenciales hardcodeadas en el código fuente; la protección de las comunicaciones mediante TLS 1.2 o superior; controles de acceso de origen (CORS restrictivo); y mecanismos de limitación de tasa (rate limiting) en servicios expuestos a internet."
 
-function extractAndParseFindings(raw: string, filePath: string, law: string): Finding[] {
+**Art. 6 — Notificación de incidentes**: "Los operadores deberán notificar al CSIRT Nacional todo incidente de ciberseguridad de impacto significativo dentro de las 3 horas siguientes de haberlo detectado, incluyendo una descripción preliminar del incidente, los sistemas afectados y las medidas iniciales adoptadas."
+
+**Art. 8 — Principios de seguridad por diseño**: "Los sistemas y servicios digitales deberán diseñarse incorporando medidas de seguridad desde su concepción, aplicando los principios de seguridad por defecto, mínima superficie de ataque, defensa en profundidad y separación de privilegios."
+
+## Instrucciones de análisis
+1. Revisa el código con mentalidad de pentester + auditor legal.
+2. Al reportar credenciales o secretos, usa "***REDACTED***" en el codeSnippet.
+3. Si el controlador completo tiene [Authorize] a nivel de clase, los endpoints individuales están cubiertos (no reportar falso positivo).
+4. Para cada hallazgo incluye el campo "citation" con el texto relevante citado TEXTUALMENTE de los artículos anteriores.
+5. En "citation.whyFix" genera 2-3 párrafos ESPECÍFICOS al hallazgo: qué vector de ataque habilita este código, las consecuencias legales (notificación al CSIRT en 3h, multas), y cómo la corrección cierra la vulnerabilidad.
+6. En "suggestedPrompt" genera un prompt detallado y contextualizado con el snippet exacto para que el desarrollador lo use directamente con una IA.
+7. Responde ÚNICAMENTE con un JSON array. NO incluyas markdown, texto previo ni posterior.
+
+## Esquema JSON por hallazgo (incluir TODOS los campos):
+{"id":"uuid-unico","type":"TIPO_EN_MAYUSCULAS","description":"descripción clara del problema","severity":"CRÍTICA|ALTA|MEDIA|BAJA","law":"Ley 21.663","article":"Art. X","lineNumber":N,"codeSnippet":"fragmento (credenciales como ***REDACTED***)","recommendation":"acción concreta a tomar","estimatedFixHours":N,"tags":["tag1","tag2"],"citation":{"law":"Ley 21.663 — Marco de Ciberseguridad","article":"Art. X — Nombre del artículo","title":"Título descriptivo","text":"cita textual exacta del artículo provisto arriba","whyFix":"párrafo 1: qué vector de ataque concreto habilita este código en este contexto específico.\\n\\npárrafo 2: consecuencias legales: obligación de notificar al CSIRT Nacional en 3h, multas, responsabilidad civil ante usuarios afectados.\\n\\npárrafo 3: por qué la corrección propuesta cierra el vector y cumple con la ley.","url":"https://www.bcn.cl/leychile/navegar?idNorma=1209272"},"suggestedPrompt":"Tengo una vulnerabilidad de seguridad (Ley 21.663) en [archivo]:[línea]...\\n\\n[contexto específico del código con snippet]\\n\\nPor favor: 1) muéstrame el código corregido completo. 2) Explica los cambios para cumplir con Art. X. 3) Indica si hay patrones similares a revisar."}
+
+Si no hay vulnerabilidades responde: []`;
+
+function extractAndParseFindings(raw: string, filePath: string, law: string): AIFinding[] {
   try {
     // Extraer JSON del texto (el LLM puede envolver en markdown fences)
     let clean = raw.trim();
@@ -81,20 +108,39 @@ function extractAndParseFindings(raw: string, filePath: string, law: string): Fi
 
     return parsed
       .filter((f: any) => f && f.type && f.description)
-      .map((f: any): Finding => ({
-        id: f.id ?? crypto.randomUUID(),
-        type: String(f.type),
-        description: String(f.description),
-        severity: (['CRÍTICA', 'ALTA', 'MEDIA', 'BAJA'].includes(f.severity) ? f.severity : 'MEDIA'),
-        law: law as any,
-        article: f.article ? String(f.article) : undefined,
-        file: filePath,
-        lineNumber: typeof f.lineNumber === 'number' ? f.lineNumber : undefined,
-        codeSnippet: f.codeSnippet ? String(f.codeSnippet).substring(0, 200) : undefined,
-        recommendation: String(f.recommendation ?? 'Revisar cumplimiento'),
-        estimatedFixHours: typeof f.estimatedFixHours === 'number' ? f.estimatedFixHours : undefined,
-        tags: Array.isArray(f.tags) ? f.tags.map(String) : [],
-      }));
+      .map((f: any): AIFinding => {
+        // Parsear citation generado por la IA
+        let citation: AILawCitation | undefined;
+        if (f.citation && typeof f.citation === 'object') {
+          citation = {
+            law:     String(f.citation.law     ?? law),
+            article: String(f.citation.article ?? f.article ?? ''),
+            title:   String(f.citation.title   ?? ''),
+            text:    String(f.citation.text    ?? ''),
+            whyFix:  String(f.citation.whyFix  ?? ''),
+            url:     f.citation.url ? String(f.citation.url) : undefined,
+          };
+          // Descartar citations vacías
+          if (!citation.text && !citation.whyFix) { citation = undefined; }
+        }
+
+        return {
+          id: f.id ?? crypto.randomUUID(),
+          type: String(f.type),
+          description: String(f.description),
+          severity: (['CRÍTICA', 'ALTA', 'MEDIA', 'BAJA'].includes(f.severity) ? f.severity : 'MEDIA'),
+          law: law as any,
+          article: f.article ? String(f.article) : undefined,
+          file: filePath,
+          lineNumber: typeof f.lineNumber === 'number' ? f.lineNumber : undefined,
+          codeSnippet: f.codeSnippet ? String(f.codeSnippet).substring(0, 300) : undefined,
+          recommendation: String(f.recommendation ?? 'Revisar cumplimiento'),
+          estimatedFixHours: typeof f.estimatedFixHours === 'number' ? f.estimatedFixHours : undefined,
+          tags: Array.isArray(f.tags) ? f.tags.map(String) : [],
+          citation,
+          suggestedPrompt: f.suggestedPrompt ? String(f.suggestedPrompt) : undefined,
+        };
+      });
   } catch {
     return [];
   }
@@ -107,12 +153,12 @@ async function runAgentWithCopilot(
   fileType: string,
   agentName: string,
   law: string,
-): Promise<AgentReport> {
+): Promise<AIAgentReport> {
   const t0 = Date.now();
   const truncated = code.length > 12000 ? code.substring(0, 12000) + '\n// [truncado]' : code;
-  const userPrompt = `Archivo: ${filePath}\nTipo: ${fileType}\n\n\`\`\`${fileType}\n${truncated}\n\`\`\`\n\nAnaliza y responde con el JSON array.`;
+  const userPrompt = `Archivo: ${filePath}\nTipo: ${fileType}\n\n\`\`\`${fileType}\n${truncated}\n\`\`\`\n\nAnaliza y responde con el JSON array incluyendo citation y suggestedPrompt por hallazgo.`;
 
-  let findings: Finding[] = [];
+  let findings: AIFinding[] = [];
 
   try {
     // Intentar modelos Copilot en orden de preferencia
@@ -151,12 +197,12 @@ async function runAgentWithExternalProvider(
   apiKey: string,
   model: string,
   azureEndpoint: string,
-): Promise<AgentReport> {
+): Promise<AIAgentReport> {
   const t0 = Date.now();
   const truncated = code.length > 12000 ? code.substring(0, 12000) + '\n// [truncado]' : code;
-  const userPrompt = `Archivo: ${filePath}\nTipo: ${fileType}\n\n\`\`\`${fileType}\n${truncated}\n\`\`\`\n\nAnaliza y responde con el JSON array.`;
+  const userPrompt = `Archivo: ${filePath}\nTipo: ${fileType}\n\n\`\`\`${fileType}\n${truncated}\n\`\`\`\n\nAnaliza y responde con el JSON array incluyendo citation y suggestedPrompt por hallazgo.`;
 
-  let findings: Finding[] = [];
+  let findings: AIFinding[] = [];
 
   try {
     let rawResponse: string;
@@ -179,8 +225,7 @@ async function runAgentWithExternalProvider(
         body: JSON.stringify({
           model: providerType === 'azure-openai' ? undefined : model,
           temperature: 0,
-          max_tokens: 4096,
-          response_format: { type: 'json_object' },
+          max_tokens: 8192,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user',   content: userPrompt   },
@@ -201,7 +246,7 @@ async function runAgentWithExternalProvider(
         },
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          max_tokens: 8192,
           system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
         }),
@@ -223,8 +268,8 @@ async function runAgentWithExternalProvider(
 }
 
 function buildAgentReport(
-  agentName: string, law: string, findings: Finding[], ms: number,
-): AgentReport {
+  agentName: string, law: string, findings: AIFinding[], ms: number,
+): AIAgentReport {
   type Sev = 'CRÍTICA' | 'ALTA' | 'MEDIA' | 'BAJA';
   const ORDER: Record<Sev, number> = { 'CRÍTICA': 0, 'ALTA': 1, 'MEDIA': 2, 'BAJA': 3 };
   findings = [...findings].sort((a, b) => ORDER[a.severity as Sev] - ORDER[b.severity as Sev]);

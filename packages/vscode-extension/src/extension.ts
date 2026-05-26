@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import { SettingsManager } from './settings-manager.js';
-import { analyzeWithAI } from './ai-client.js';
+import { analyzeWithAI, AIFinding, AIAnalysisResult } from './ai-client.js';
 
 /** Sube desde startDir hasta encontrar la raíz del proyecto (.git / package.json / .sln). */
 function findProjectRoot(startDir: string): string {
@@ -52,6 +52,7 @@ interface Finding {
   file?: string; lineNumber?: number; codeSnippet?: string;
   recommendation: string; estimatedFixHours?: number; tags: string[];
   citation?: LawCitation;
+  suggestedPrompt?: string; // Usado en modo IA: prompt generado por la IA para corregir el hallazgo
 }
 interface PassingCheck {
   id: string; type: string; description: string;
@@ -500,6 +501,50 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
 let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 let _settingsManager: SettingsManager | undefined;
 
+// Cache de hallazgos de IA por URI de documento (para hover provider y reportes)
+const _aiFindings = new Map<string, Finding[]>();
+
+/** Convierte AIFinding[] de ai-client a Finding[] de extension (estructuralmente compatibles). */
+function aiToFindings(aiFindings: AIFinding[]): Finding[] {
+  return aiFindings.map(f => ({
+    id: f.id, type: f.type, description: f.description,
+    severity: f.severity as Severity, law: f.law, article: f.article,
+    file: f.file, lineNumber: f.lineNumber, codeSnippet: f.codeSnippet,
+    recommendation: f.recommendation, estimatedFixHours: f.estimatedFixHours,
+    tags: f.tags,
+    // citation compatible: AILawCitation === LawCitation estructuralmente
+    citation: f.citation as LawCitation | undefined,
+    suggestedPrompt: f.suggestedPrompt,
+  }));
+}
+
+/** Convierte AIAnalysisResult en Report para usar con printReport / buildHtmlReport. */
+function aiResultToReport(
+  result: AIAnalysisResult, filePath: string, options?: { generatedBy?: string }
+): Report {
+  const allFindings = result.agentReports.flatMap(r => aiToFindings(r.findings));
+  return {
+    projectName: filePath,
+    analyzedAt: new Date().toISOString(),
+    totalExecutionMs: result.agentReports.reduce((s, r) => s + r.executionMs, 0),
+    filesAnalyzed: [filePath],
+    overallStatus: result.overallStatus,
+    overallScore: result.overallScore,
+    totalFindings: result.totalFindings,
+    criticalFindings: result.criticalFindings,
+    highFindings: result.highFindings,
+    mediumFindings: allFindings.filter(f => f.severity === 'MEDIA').length,
+    lowFindings: allFindings.filter(f => f.severity === 'BAJA').length,
+    blockMerge: result.criticalFindings > 0,
+    recommendations: [],
+    generatedBy: options?.generatedBy ?? 'Syntaxis Compliance Checker [IA]',
+    passingChecks: [],
+    agentReports: result.agentReports.map(r => ({
+      agentName: r.agentName, law: r.law, findings: aiToFindings(r.findings),
+    })),
+  };
+}
+
 function refreshDiagnostics(document: vscode.TextDocument): void {
   if (!diagnosticCollection) { return; }
   const supported = ['csharp','javascript','typescript','sql'];
@@ -517,20 +562,23 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
       }
       try {
         const result = await analyzeWithAI(document.getText(), document.fileName, fileType, _settingsManager!);
+        const findings = result.agentReports.flatMap(r => aiToFindings(r.findings));
+
+        // Guardar findings en cache para hover y reportes
+        _aiFindings.set(document.uri.toString(), findings);
+
         const diags: vscode.Diagnostic[] = [];
-        for (const ar of result.agentReports) {
-          for (const f of ar.findings) {
-            if (!f.lineNumber) { continue; }
-            const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
-            const line = document.lineAt(lineIdx);
-            const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
-            const d = new vscode.Diagnostic(range,
-              `[IA][${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
-              (f.severity === 'CRÍTICA' || f.severity === 'ALTA') ? vscode.DiagnosticSeverity.Error
-                : f.severity === 'MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
-            d.source = `Syntaxis IA (${f.law})`; d.code = f.article ?? f.type;
-            diags.push(d);
-          }
+        for (const f of findings) {
+          if (!f.lineNumber) { continue; }
+          const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
+          const line = document.lineAt(lineIdx);
+          const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
+          const d = new vscode.Diagnostic(range,
+            `[IA][${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
+            (f.severity === 'CRÍTICA' || f.severity === 'ALTA') ? vscode.DiagnosticSeverity.Error
+              : f.severity === 'MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
+          d.source = `Syntaxis IA (${f.law})`; d.code = f.article ?? f.type;
+          diags.push(d);
         }
         diagnosticCollection?.set(document.uri, diags);
       } catch { /* silencioso en diagnósticos automáticos */ }
@@ -600,9 +648,20 @@ export function activate(context: vscode.ExtensionContext): void {
       [{ language: 'csharp' }, { language: 'javascript' }, { language: 'typescript' }, { language: 'sql' }],
       {
         provideHover(document, position) {
-          const report = analyzeCode(document.getText(), document.fileName);
-          const allFindings = report.agentReports.flatMap(a => a.findings);
-          const allChecks   = report.passingChecks;
+          const mode = _settingsManager?.getAnalysisMode() ?? 'static';
+          let allFindings: Finding[];
+          let allChecks: PassingCheck[];
+
+          if (mode === 'ai') {
+            // En modo IA usamos los findings del último análisis (cache)
+            allFindings = _aiFindings.get(document.uri.toString()) ?? [];
+            allChecks = [];
+          } else {
+            // En modo estático: análisis sincrónico con citas hardcodeadas
+            const report = analyzeCode(document.getText(), document.fileName);
+            allFindings = report.agentReports.flatMap(a => a.findings);
+            allChecks   = report.passingChecks;
+          }
 
           const finding = allFindings.find(f => f.lineNumber === position.line + 1 && f.citation);
           if (finding?.citation) {
@@ -610,6 +669,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const icon = finding.severity === 'CRÍTICA' ? '🔴' : finding.severity === 'ALTA' ? '🟠' : finding.severity === 'MEDIA' ? '🟡' : '🔵';
             const md = new vscode.MarkdownString('', true);
             md.isTrusted = true;
+            if (mode === 'ai') { md.appendMarkdown(`*🤖 Análisis generado por IA*\n\n`); }
             md.appendMarkdown(`**${icon} ${c.law}**\n\n`);
             md.appendMarkdown(`**${c.article}** — *${c.title}*\n\n`);
             md.appendMarkdown(`---\n\n${c.text.replace(/\n/g, '\n\n')}\n\n`);
@@ -644,11 +704,28 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('syntaxis.checkFile', async () => {
       const ed = vscode.window.activeTextEditor;
       if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title:'Syntaxis: Analizando...' }, async () => {
-        const report = analyzeCode(ed.document.getText(), ed.document.fileName);
-        refreshDiagnostics(ed.document);
-        printReport(report);
-        notify(report);
+      const mode = _settingsManager?.getAnalysisMode() ?? 'static';
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: mode === 'ai' ? 'Syntaxis IA: Analizando...' : 'Syntaxis: Analizando...' }, async () => {
+        if (mode === 'ai') {
+          const { valid, reason } = await _settingsManager!.validateAIConfig();
+          if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+          try {
+            const fileType = ed.document.languageId as any;
+            const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
+            const report = aiResultToReport(result, ed.document.fileName);
+            _aiFindings.set(ed.document.uri.toString(), report.agentReports.flatMap(a => a.findings));
+            refreshDiagnostics(ed.document);
+            printReport(report);
+            notify(report);
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
+          }
+        } else {
+          const report = analyzeCode(ed.document.getText(), ed.document.fileName);
+          refreshDiagnostics(ed.document);
+          printReport(report);
+          notify(report);
+        }
       });
     })
   );
@@ -723,12 +800,29 @@ export function activate(context: vscode.ExtensionContext): void {
         { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: false },
         async (progress) => {
           let consolidatedReport: Report | undefined;
+          const aiMode = _settingsManager?.getAnalysisMode() === 'ai';
 
           // ── Recopilar datos ────────────────────────────────────────────────
           if (choice === '📄 Archivo actual') {
             const ed = vscode.window.activeTextEditor;
             if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
-            consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName, { generatedBy });
+
+            if (aiMode) {
+              const { valid, reason } = await _settingsManager!.validateAIConfig();
+              if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+              progress.report({ message: 'Analizando con IA...' });
+              try {
+                const fileType = ed.document.languageId as any;
+                const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
+                consolidatedReport = aiResultToReport(result, ed.document.fileName, { generatedBy: `${generatedBy} [IA]` });
+                _aiFindings.set(ed.document.uri.toString(), consolidatedReport.agentReports.flatMap(a => a.findings));
+              } catch (err: any) {
+                vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
+                return;
+              }
+            } else {
+              consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName, { generatedBy });
+            }
           } else {
             // Workspace: analizar todos los archivos
             progress.report({ message: 'Buscando archivos...' });
@@ -1151,12 +1245,16 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
           </details>
         </td>
       </tr>` : '';
-    const prompt = buildSuggestedPrompt(f);
+    // Usar prompt generado por IA si existe; de lo contrario generar estáticamente
+    const prompt = f.suggestedPrompt ?? buildSuggestedPrompt(f);
+    const promptLabel = f.suggestedPrompt
+      ? '🤖 Prompt sugerido para corregir con IA <span style="color:#64748b;font-weight:400;font-size:.75rem">(generado por IA)</span>'
+      : '🤖 Prompt sugerido para corregir con IA';
     const promptHtml = `
       <tr style="background:${bg}">
         <td colspan="7" style="padding:.3rem .6rem .9rem 2rem;border-top:none">
           <details style="cursor:pointer">
-            <summary style="color:#0891b2;font-size:.8rem;font-weight:600;user-select:none">🤖 Prompt sugerido para corregir con IA</summary>
+            <summary style="color:#0891b2;font-size:.8rem;font-weight:600;user-select:none">${promptLabel}</summary>
             <div style="margin-top:.6rem">
               <pre id="prompt-${f.id}" style="background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:6px;font-size:.76rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(prompt)}</pre>
               <button onclick="(function(btn){var pre=document.getElementById('prompt-${f.id}');navigator.clipboard.writeText(pre.textContent).then(function(){var t=btn.textContent;btn.textContent='✅ ¡Copiado!';btn.style.background='#16a34a';setTimeout(function(){btn.textContent=t;btn.style.background='';},2000);})})(this)"
