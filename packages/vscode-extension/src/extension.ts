@@ -241,6 +241,7 @@ interface Report {
   totalFindings: number; criticalFindings: number; highFindings: number;
   mediumFindings: number; lowFindings: number;
   blockMerge: boolean; recommendations: string[]; generatedBy: string;
+  analysisMode?: 'ai' | 'static'; aiErrors?: string[];
   passingChecks: PassingCheck[];
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
 }
@@ -257,6 +258,15 @@ function localISOString(date = new Date()): string {
   const hh = String(Math.floor(absOffset / 60)).padStart(2, '0');
   const mm = String(absOffset % 60).padStart(2, '0');
   return `${base}${sign}${hh}:${mm}`;
+}
+
+// ─── Fórmula de score compartida (estático + IA) ─────────────────────────────
+function calculateScore(crit: number, high: number, media: number, baja: number): number {
+  const critPenalty  = Math.min(crit  * 20, 60);
+  const highPenalty  = Math.min(high  *  8, 20);
+  const mediaPenalty = Math.min(media *  4, 10);
+  const bajaPenalty  = Math.min(baja  *  2,  5);
+  return Math.max(0, 100 - critPenalty - highPenalty - mediaPenalty - bajaPenalty);
 }
 
 
@@ -393,14 +403,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
   const media = findings.filter(f=>f.severity==='MEDIA').length;
   const baja  = findings.filter(f=>f.severity==='BAJA').length;
   const st: Status = crit>0 ? 'FAIL' : high>0 ? 'WARN' : 'PASS';
-  // Fórmula ponderada con caps por tier:
-  // CRÍTICA pesa 4x, ALTA pesa 2x, MEDIA 1x, BAJA 0.5x
-  // Cada tier tiene un techo para que el score no colapse a 0 con pocos hallazgos
-  const critPenalty  = Math.min(crit  * 20, 60);   // 1→20, 2→40, 3+→60
-  const highPenalty  = Math.min(high  *  8, 20);   // 1→8,  2→16, 3+→20
-  const mediaPenalty = Math.min(media *  4, 10);   // 1→4,  2→8,  3+→10
-  const bajaPenalty  = Math.min(baja  *  2,  5);   // 1→2,  2→4,  3+→5
-  const score = Math.max(0, 100 - critPenalty - highPenalty - mediaPenalty - bajaPenalty);
+  const score = calculateScore(crit, high, media, baja);
 
   // ── Detección de controles que SÍ cumplen ─────────────────────────────────
   const passingChecks: PassingCheck[] = [];
@@ -487,6 +490,7 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
     blockMerge: crit>0,
     recommendations: [...new Map(findings.map(f=>[f.type,f.recommendation])).values()].slice(0,5),
     generatedBy: opts?.generatedBy ?? '',
+    analysisMode: 'static',
     passingChecks: uniquePassing,
     agentReports: [
       { agentName:'DPA Agent (Ley 21.719)', law:'Ley 21.719', findings:findings.filter(f=>f.law==='Ley 21.719').sort((a,b)=>SEVERITY_ORDER[a.severity]-SEVERITY_ORDER[b.severity]) },
@@ -518,14 +522,60 @@ function aiToFindings(aiFindings: AIFinding[]): Finding[] {
   }));
 }
 
+/** Detecta controles que cumplen usando análisis estático (REGEX). Reutilizable en modo IA. */
+function detectPassingChecks(code: string, filePath: string): PassingCheck[] {
+  const lines = code.split('\n');
+  const passingChecks: PassingCheck[] = [];
+  const skip = (l: string) => l.trim().startsWith('//') || l.trim().startsWith('*');
+
+  const piiRe = [/\bemail\b/i, /\bphone\b/i, /\brut\b/i, /\bpassword\b/i, /\bsalud\b/i, /\bhealth/i];
+  const encRe = [/encrypt/i, /hash/i, /bcrypt/i, /AES/i, /cifra/i];
+  const propRe = /\b(string|nvarchar|varchar|TEXT)\b/i;
+  const sqlRe = [/\+\s*["'`]?\s*(SELECT|INSERT|UPDATE|DELETE|WHERE)\b/i, /\$["'`]\s*(SELECT|INSERT|UPDATE|DELETE)\b/i, /string\.Format\(["'].*?(SELECT|INSERT|UPDATE|DELETE)/i, /["`']\s*\+\s*\w+\s*\+\s*["`']/];
+  const safeQueryRe = /(@\w+|:\w+|\?)\s*(,|\)|;)/;
+  const ormRe = /\.(FromSql|Query|Where|Include|FirstOrDefault|ToList|ExecuteSql)\b|DbSet<|\.createQueryBuilder|knex\.|sequelize\./i;
+  const epRe = /\[(Http(Get|Post|Put|Delete|Patch)|Route|ApiController)\]|app\.(get|post|put|delete|patch)\(|router\.(get|post|put|delete)/i;
+  const authRe = /\[Authorize|\.UseAuthentication|\.UseAuthorization|requireAuth|isAuthenticated|passport\./i;
+  const logFnRe = /console\.(log|error)|logger\.(info|error)|\._logger\.Log/i;
+  const piiValRe = /\b(email|password|rut|phone|credit)\b/i;
+  const safeCredRe = /Environment\.GetEnvironmentVariable|process\.env\.|KeyVault|secretsmanager|IConfiguration\[|_config\[|GetValue<string>/i;
+
+  lines.forEach((line, i) => {
+    if (skip(line)) { return; }
+    if (piiRe.some(r => r.test(line)) && encRe.some(e => e.test(line)) && propRe.test(line)) {
+      passingChecks.push({ id: crypto.randomUUID(), type: 'PII_ENCRYPTED', description: 'Campo con datos personales correctamente cifrado', law: 'Ley 21.719', article: 'Ley 21.719, Art. 18 — Medidas de seguridad', file: filePath, lineNumber: i + 1, evidence: line.trim().slice(0, 80), citation: LAW_CITATIONS['PII_ENCRYPTED'] });
+    }
+    if ((safeQueryRe.test(line) || ormRe.test(line)) && !sqlRe.some(r => r.test(line))) {
+      passingChecks.push({ id: crypto.randomUUID(), type: 'SAFE_QUERY', description: 'Consulta segura: parámetros o ORM detectado', law: 'Ley 21.719', article: 'Ley 21.719, Art. 18 + Art. 20 — Seguridad', file: filePath, lineNumber: i + 1, evidence: line.trim().slice(0, 80), citation: LAW_CITATIONS['SAFE_QUERY'] });
+    }
+    if (epRe.test(line) && authRe.test(line)) {
+      passingChecks.push({ id: crypto.randomUUID(), type: 'ENDPOINT_AUTHENTICATED', description: 'Endpoint con autenticación declarada en la misma línea', law: 'Ley 21.663', article: 'Ley 21.663, Art. 6 — Obligaciones de seguridad', file: filePath, lineNumber: i + 1, evidence: line.trim().slice(0, 80), citation: LAW_CITATIONS['ENDPOINT_AUTHENTICATED'] });
+    }
+    if (safeCredRe.test(line)) {
+      passingChecks.push({ id: crypto.randomUUID(), type: 'SAFE_CREDENTIAL_STORAGE', description: 'Credencial obtenida de variable de entorno o vault', law: 'Ley 21.663', article: 'Ley 21.663, Art. 6 — Gestión segura de secretos + NIST SC-28', file: filePath, lineNumber: i + 1, evidence: line.trim().slice(0, 80), citation: LAW_CITATIONS['SAFE_CREDENTIAL_STORAGE'] });
+    }
+    if (logFnRe.test(line) && !piiValRe.test(line)) {
+      passingChecks.push({ id: crypto.randomUUID(), type: 'SAFE_LOGGING', description: 'Log sin datos personales identificables', law: 'Ley 21.719', article: 'Ley 21.719, Art. 3 — Principio de minimización', file: filePath, lineNumber: i + 1, evidence: line.trim().slice(0, 80), citation: LAW_CITATIONS['SAFE_LOGGING'] });
+    }
+  });
+
+  const seen = new Set<string>();
+  return passingChecks.filter(p => {
+    const k = `${p.type}:${p.lineNumber}`;
+    if (seen.has(k)) { return false; }
+    seen.add(k); return true;
+  });
+}
+
 /** Convierte AIAnalysisResult en Report para usar con printReport / buildHtmlReport. */
 function aiResultToReport(
-  result: AIAnalysisResult, filePath: string, options?: { generatedBy?: string }
+  result: AIAnalysisResult, filePath: string, options?: { generatedBy?: string; code?: string }
 ): Report {
   const allFindings = result.agentReports.flatMap(r => aiToFindings(r.findings));
+  const passingChecks = options?.code ? detectPassingChecks(options.code, filePath) : [];
   return {
     projectName: filePath,
-    analyzedAt: new Date().toISOString(),
+    analyzedAt: localISOString(),
     totalExecutionMs: result.agentReports.reduce((s, r) => s + r.executionMs, 0),
     filesAnalyzed: [filePath],
     overallStatus: result.overallStatus,
@@ -538,7 +588,12 @@ function aiResultToReport(
     blockMerge: result.criticalFindings > 0,
     recommendations: [],
     generatedBy: options?.generatedBy ?? 'Syntaxis Compliance Checker [IA]',
-    passingChecks: [],
+    analysisMode: 'ai',
+    aiErrors: result.agentReports
+      .flatMap(r => r.findings)
+      .filter(f => f.type === 'AI_PROVIDER_ERROR')
+      .map(f => f.description),
+    passingChecks,
     agentReports: result.agentReports.map(r => ({
       agentName: r.agentName, law: r.law, findings: aiToFindings(r.findings),
     })),
@@ -617,7 +672,9 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
         const findings = result.agentReports.flatMap(r => aiToFindings(r.findings));
         _aiFindings.set(document.uri.toString(), findings);
         applyAIDiagnostics(document, findings);
-      } catch { /* silencioso en diagnósticos automáticos */ }
+      } catch (err: any) {
+        vscode.window.showWarningMessage(`Syntaxis IA: Error en diagnósticos — ${err?.message ?? 'Error desconocido'}`);
+      }
     });
     return;
   }
@@ -674,7 +731,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveTextEditor(e => e && debouncedRefresh(e.document)),
     vscode.workspace.onDidChangeTextDocument(e => debouncedRefresh(e.document)),
     vscode.workspace.onDidOpenTextDocument(debouncedRefresh),
-    diagnosticCollection,
   );
 
   if (vscode.window.activeTextEditor) { refreshDiagnostics(vscode.window.activeTextEditor.document); }
@@ -749,7 +805,7 @@ export function activate(context: vscode.ExtensionContext): void {
           try {
             const fileType = ed.document.languageId as any;
             const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
-            const report = aiResultToReport(result, ed.document.fileName);
+            const report = aiResultToReport(result, ed.document.fileName, { code: ed.document.getText() });
             const aiFindings = report.agentReports.flatMap(a => a.findings);
             _aiFindings.set(ed.document.uri.toString(), aiFindings);
             // Aplicar diagnostics directamente — sin llamar refreshDiagnostics (evita doble request al LLM)
@@ -774,8 +830,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('syntaxis.checkWorkspace', async () => {
       const files = await vscode.workspace.findFiles('**/*.{cs,ts,js,sql}', '{**/node_modules/**,**/obj/**,**/bin/**,**/dist/**}');
       if (!files.length) { vscode.window.showInformationMessage('Syntaxis: No hay archivos para analizar.'); return; }
+      const aiMode = _settingsManager?.getAnalysisMode() === 'ai';
+
+      if (aiMode) {
+        const { valid, reason } = await _settingsManager!.validateAIConfig();
+        if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+      }
+
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
-        title:`Syntaxis: Analizando ${files.length} archivos...`, cancellable:true }, async (progress, token) => {
+        title:`Syntaxis: Analizando ${files.length} archivos${aiMode ? ' [IA]' : ''}...`, cancellable:true }, async (progress, token) => {
         // Pre-pass: detectar filtro global de autenticación en Program.cs / Startup.cs
         let globalAuthFilter = false;
         for (const f of files) {
@@ -792,13 +855,25 @@ export function activate(context: vscode.ExtensionContext): void {
         let crit=0, hi=0;
         for (let i=0; i<files.length; i++) {
           if (token.isCancellationRequested) { break; }
-          progress.report({ increment:100/files.length, message:path.basename(files[i].fsPath) });
-          const doc = await vscode.workspace.openTextDocument(files[i]);
-          const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
-          refreshDiagnostics(doc); crit+=r.criticalFindings; hi+=r.highFindings;
+          progress.report({ increment:100/files.length, message:`${path.basename(files[i].fsPath)}${aiMode ? ' [IA]' : ''}` });
+          try {
+            const doc = await vscode.workspace.openTextDocument(files[i]);
+            if (aiMode) {
+              const fileType = doc.languageId as any;
+              const result = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
+              const r = aiResultToReport(result, files[i].fsPath, { code: doc.getText() });
+              const findings = r.agentReports.flatMap(a => a.findings);
+              _aiFindings.set(doc.uri.toString(), findings);
+              applyAIDiagnostics(doc, findings);
+              crit += r.criticalFindings; hi += r.highFindings;
+            } else {
+              const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
+              refreshDiagnostics(doc); crit+=r.criticalFindings; hi+=r.highFindings;
+            }
+          } catch { /* skip unreadable files */ }
         }
         const icon = crit>0?'❌':hi>0?'⚠️':'✅';
-        vscode.window.showInformationMessage(`${icon} ${files.length} archivos: ${crit} CRÍTICA, ${hi} ALTA`);
+        vscode.window.showInformationMessage(`${icon} ${files.length} archivos${aiMode ? ' [IA]' : ''}: ${crit} CRÍTICA, ${hi} ALTA`);
       });
     })
   );
@@ -853,7 +928,7 @@ export function activate(context: vscode.ExtensionContext): void {
               try {
                 const fileType = ed.document.languageId as any;
                 const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
-                consolidatedReport = aiResultToReport(result, ed.document.fileName, { generatedBy: `${generatedBy} [IA]` });
+                consolidatedReport = aiResultToReport(result, ed.document.fileName, { generatedBy: `${generatedBy} [IA]`, code: ed.document.getText() });
                 _aiFindings.set(ed.document.uri.toString(), consolidatedReport.agentReports.flatMap(a => a.findings));
               } catch (err: any) {
                 vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
@@ -904,7 +979,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (aiMode) {
                   const fileType = doc.languageId as any;
                   const aiResult = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
-                  r = aiResultToReport(aiResult, files[i].fsPath, { generatedBy: `${generatedBy} [IA]` });
+                  r = aiResultToReport(aiResult, files[i].fsPath, { generatedBy: `${generatedBy} [IA]`, code: doc.getText() });
                 } else {
                   r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
                 }
@@ -918,7 +993,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 // Merge agent findings
                 r.agentReports.forEach((ar, idx) => {
                   if (!allAgentReports[idx]) {
-                    allAgentReports.push({ ...ar });
+                    allAgentReports.push({ ...ar, findings: [...ar.findings] });
                   } else {
                     allAgentReports[idx].findings.push(...ar.findings);
                   }
@@ -1275,7 +1350,8 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     return `| ✅ ${p.type.replace(/_/g,' ')} | ${loc} | ${p.description.replace(/\|/g,'\\|')} | ${p.article??p.law} |\n${citationBlock}`;
   }).join('\n');
 
-  return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n` +
+  const modeBadge = report.analysisMode === 'ai' ? '> 🤖 **Modo: Análisis con IA**\n\n' : '> 🔎 **Modo: Análisis Estático**\n\n';
+  return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n${modeBadge}` +
     `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}` +
     (report.generatedBy ? `  **Generado por:** ${report.generatedBy}` : '') + `\n\n---\n\n` +
     `| Métrica | Valor |\n|---|---|\n` +
@@ -1472,6 +1548,7 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
     </div>
   </div>
   <span class="badge">${statusLabel}</span>
+  ${report.analysisMode === 'ai' ? '<span style="display:inline-block;padding:.3rem .9rem;border-radius:999px;background:#7c3aed;color:#fff;font-weight:700;font-size:.85rem;margin-left:.5rem">🤖 Análisis con IA</span>' : '<span style="display:inline-block;padding:.3rem .9rem;border-radius:999px;background:#475569;color:#fff;font-weight:700;font-size:.85rem;margin-left:.5rem">🔎 Análisis Estático</span>'}
 </div>
 <div class="cards">
   <div class="card">

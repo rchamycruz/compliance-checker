@@ -281,8 +281,18 @@ async function runAgentWithExternalProvider(
     }
 
     findings = extractAndParseFindings(rawResponse, filePath, law);
-  } catch {
+  } catch (err: any) {
+    const msg = err?.message ?? 'Error desconocido en proveedor IA';
     findings = [];
+    findings.push({
+      id: `ai-error-${Date.now()}`,
+      type: 'AI_PROVIDER_ERROR',
+      description: `Error al comunicarse con el proveedor IA: ${msg}`,
+      severity: 'MEDIA',
+      law: 'N/A',
+      recommendation: 'Verificar la configuración del proveedor IA (API key, endpoint, modelo).',
+      tags: ['ai-error'],
+    } as AIFinding);
   }
 
   return buildAgentReport(agentName, law, findings, Date.now() - t0);
@@ -349,9 +359,14 @@ export async function analyzeWithAI(
   const highCount     = allFindings.filter(f => f.severity === 'ALTA').length;
 
   const overallStatus = criticalCount > 0 ? 'FAIL' : highCount > 0 ? 'WARN' : 'PASS';
-  const penalty = criticalCount * 25 + highCount * 10 +
-    allFindings.filter(f => f.severity === 'MEDIA').length * 3 +
-    allFindings.filter(f => f.severity === 'BAJA').length * 1;
+  const mediumCount = allFindings.filter(f => f.severity === 'MEDIA').length;
+  const lowCount    = allFindings.filter(f => f.severity === 'BAJA').length;
+  // Fórmula compartida con analyzeCode: caps por tier
+  const critPenalty  = Math.min(criticalCount * 20, 60);
+  const highPenalty  = Math.min(highCount     *  8, 20);
+  const mediaPenalty = Math.min(mediumCount   *  4, 10);
+  const bajaPenalty  = Math.min(lowCount      *  2,  5);
+  const penalty = critPenalty + highPenalty + mediaPenalty + bajaPenalty;
 
   return {
     agentReports,
