@@ -1,9 +1,11 @@
 // packages/vscode-extension/src/extension.ts
-// v0.2.0: análisis real, sin memory leaks, sin stubs hardcodeados
+// v0.8.0: dual-mode analysis — Análisis Estático (offline) + Análisis con IA (LLM)
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as vscode from 'vscode';
+import { SettingsManager } from './settings-manager.js';
+import { analyzeWithAI } from './ai-client.js';
 
 /** Sube desde startDir hasta encontrar la raíz del proyecto (.git / package.json / .sln). */
 function findProjectRoot(startDir: string): string {
@@ -496,12 +498,47 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
 // NOTA: Se inicializa dentro de activate() — no a nivel de módulo,
 // para evitar que VS Code API se llame antes de que el host esté listo.
 let diagnosticCollection: vscode.DiagnosticCollection | undefined;
+let _settingsManager: SettingsManager | undefined;
 
 function refreshDiagnostics(document: vscode.TextDocument): void {
   if (!diagnosticCollection) { return; }
   const supported = ['csharp','javascript','typescript','sql'];
   if (!supported.includes(document.languageId)) { diagnosticCollection.delete(document.uri); return; }
 
+  const mode = _settingsManager?.getAnalysisMode() ?? 'static';
+
+  if (mode === 'ai') {
+    // Modo IA: análisis asíncrono — aplica diagnósticos cuando termina
+    const fileType = document.languageId as any;
+    _settingsManager!.validateAIConfig().then(async ({ valid, reason }) => {
+      if (!valid) {
+        vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`);
+        return;
+      }
+      try {
+        const result = await analyzeWithAI(document.getText(), document.fileName, fileType, _settingsManager!);
+        const diags: vscode.Diagnostic[] = [];
+        for (const ar of result.agentReports) {
+          for (const f of ar.findings) {
+            if (!f.lineNumber) { continue; }
+            const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
+            const line = document.lineAt(lineIdx);
+            const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
+            const d = new vscode.Diagnostic(range,
+              `[IA][${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
+              (f.severity === 'CRÍTICA' || f.severity === 'ALTA') ? vscode.DiagnosticSeverity.Error
+                : f.severity === 'MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
+            d.source = `Syntaxis IA (${f.law})`; d.code = f.article ?? f.type;
+            diags.push(d);
+          }
+        }
+        diagnosticCollection?.set(document.uri, diags);
+      } catch { /* silencioso en diagnósticos automáticos */ }
+    });
+    return;
+  }
+
+  // Modo estático (default)
   const report = analyzeCode(document.getText(), document.fileName);
   const diags: vscode.Diagnostic[] = [];
 
@@ -526,6 +563,7 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
 export function activate(context: vscode.ExtensionContext): void {
   // Inicializar aquí — dentro de activate() — para que VS Code API esté lista
   diagnosticCollection = vscode.languages.createDiagnosticCollection('syntaxis');
+  _settingsManager = new SettingsManager(context.secrets);
   context.subscriptions.push(diagnosticCollection);
 
   // Cargar logo para incluirlo en reportes HTML
@@ -536,13 +574,15 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   } catch { /* logo opcional */ }
 
-  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.7.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.8.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('   Modo: ' + (_settingsManager.getAnalysisMode() === 'ai' ? '🤖 Análisis con IA' : '🔍 Análisis Estático'));
 
-  // Debounce diagnósticos (800ms)
+  // Debounce diagnósticos (800ms — para AI se aumenta a 2s para no saturar la API)
   let timer: NodeJS.Timeout | undefined;
   const debouncedRefresh = (doc: vscode.TextDocument) => {
     if (timer) { clearTimeout(timer); }
-    timer = setTimeout(() => refreshDiagnostics(doc), 800);
+    const delay = _settingsManager?.getAnalysisMode() === 'ai' ? 2000 : 800;
+    timer = setTimeout(() => refreshDiagnostics(doc), delay);
   };
 
   context.subscriptions.push(
@@ -824,11 +864,118 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   vscode.window.setStatusBarMessage('$(shield) Syntaxis Compliance activo', 5000);
+
+  // ── Comando: Configurar API Key de IA ─────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand('syntaxis.configureApiKey', async () => {
+      const settings = _settingsManager!;
+      const provider = settings.getAIProvider();
+
+      if (provider === 'github-copilot') {
+        vscode.window.showInformationMessage(
+          '✅ GitHub Copilot no requiere API key. Asegúrate de tener Copilot activo en VS Code.',
+          'Cambiar proveedor'
+        ).then(action => {
+          if (action) { vscode.commands.executeCommand('workbench.action.openSettings', 'syntaxis.ai.provider'); }
+        });
+        return;
+      }
+
+      const providerLabel: Record<string, string> = {
+        openai: 'OpenAI', anthropic: 'Anthropic (Claude)', 'azure-openai': 'Azure OpenAI',
+      };
+      const key = await vscode.window.showInputBox({
+        title: `Syntaxis — API Key de ${providerLabel[provider] ?? provider}`,
+        prompt: `Ingresa tu API key. Se guardará de forma segura en el secretStorage de VS Code (nunca en settings.json).`,
+        password: true,
+        placeHolder: provider === 'openai' ? 'sk-...' : provider === 'anthropic' ? 'sk-ant-...' : 'Tu API key',
+        validateInput: v => (!v || v.trim() === '') ? 'La API key no puede estar vacía' : undefined,
+      });
+
+      if (!key) { return; }
+
+      await settings.storeApiKey(key.trim());
+      vscode.window.showInformationMessage(`✅ API key de ${providerLabel[provider] ?? provider} guardada correctamente.`,
+        'Verificar conexión'
+      ).then(action => {
+        if (action) { vscode.commands.executeCommand('syntaxis.testAiConnection'); }
+      });
+    })
+  );
+
+  // ── Comando: Verificar conexión con IA ────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand('syntaxis.testAiConnection', async () => {
+      const settings = _settingsManager!;
+      const provider = settings.getAIProvider();
+
+      const { valid, reason } = await settings.validateAIConfig();
+      if (!valid) {
+        vscode.window.showErrorMessage(`Syntaxis IA: ${reason}`, 'Configurar API Key').then(a => {
+          if (a) { vscode.commands.executeCommand('syntaxis.configureApiKey'); }
+        });
+        return;
+      }
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Verificando conexión con IA...' },
+        async () => {
+          try {
+            if (provider === 'github-copilot') {
+              const models = await (vscode.lm as any).selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
+              if (models?.length > 0) {
+                vscode.window.showInformationMessage('✅ GitHub Copilot disponible y listo para análisis.');
+              } else {
+                vscode.window.showWarningMessage('⚠️ GitHub Copilot no encontrado. Verifica que tienes Copilot activo y estás autenticado en VS Code.');
+              }
+              return;
+            }
+
+            const apiKey = (await settings.getApiKey()) ?? '';
+            const model  = settings.getAIModel();
+            const azureEndpt = settings.getAzureEndpoint();
+            let testOk = false;
+            let testMsg = '';
+
+            if (provider === 'openai' || provider === 'azure-openai') {
+              const baseUrl = provider === 'azure-openai'
+                ? `${azureEndpt}/openai/deployments/${model}`
+                : 'https://api.openai.com/v1';
+              const url = provider === 'azure-openai'
+                ? `${baseUrl}/chat/completions?api-version=2024-02-15-preview`
+                : `${baseUrl}/chat/completions`;
+              const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`, ...(provider === 'azure-openai' ? { 'api-key': apiKey } : {}) },
+                body: JSON.stringify({ model: provider === 'azure-openai' ? undefined : model, max_tokens: 5, messages: [{ role: 'user', content: '{"ok":true}' }] }),
+              });
+              testOk  = res.ok;
+              testMsg = res.ok ? `Conexión exitosa con ${provider} (${model})` : `Error HTTP ${res.status}`;
+            } else if (provider === 'anthropic') {
+              const res = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+                body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: 'user', content: '{"ok":true}' }] }),
+              });
+              testOk  = res.ok;
+              testMsg = res.ok ? `Conexión exitosa con Anthropic (${model})` : `Error HTTP ${res.status}`;
+            }
+
+            if (testOk) { vscode.window.showInformationMessage(`✅ ${testMsg}`); }
+            else        { vscode.window.showErrorMessage(`❌ Syntaxis IA: ${testMsg}. Verifica tu API key.`); }
+          } catch (e: any) {
+            vscode.window.showErrorMessage(`❌ Syntaxis IA: Error de conexión — ${e?.message ?? 'desconocido'}`);
+          }
+        }
+      );
+    })
+  );
 }
 
 export function deactivate(): void {
   diagnosticCollection?.dispose();
   diagnosticCollection = undefined;
+  _settingsManager = undefined;
   outputChannel?.dispose();
   outputChannel = undefined;
 }

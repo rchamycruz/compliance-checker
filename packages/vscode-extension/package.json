@@ -11,7 +11,7 @@
     "url": "https://github.com/rchamycruz/compliance-checker"
   },
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Linters",
@@ -44,8 +44,55 @@
         "command": "syntaxis.generateReport",
         "title": "Generar reporte",
         "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.configureApiKey",
+        "title": "Configurar API Key de IA",
+        "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.testAiConnection",
+        "title": "Verificar conexión con IA",
+        "category": "Syntaxis"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Syntaxis Compliance Checker",
+      "properties": {
+        "syntaxis.analysisMode": {
+          "type": "string",
+          "enum": ["static", "ai"],
+          "enumDescriptions": [
+            "Análisis Estático: reglas deterministas, rápido, sin conexión a internet",
+            "Análisis con IA: agentes LLM especializados por ley, mayor profundidad semántica"
+          ],
+          "default": "static",
+          "description": "Modo de análisis de compliance. 'static' usa reglas regex offline; 'ai' usa modelos de lenguaje especializados por cada ley."
+        },
+        "syntaxis.ai.provider": {
+          "type": "string",
+          "enum": ["github-copilot", "openai", "anthropic", "azure-openai"],
+          "enumDescriptions": [
+            "GitHub Copilot — usa tu suscripción activa de Copilot (sin API key adicional)",
+            "OpenAI — GPT-4o, GPT-4o-mini, o1-mini (requiere API key)",
+            "Anthropic — Claude 3.5 Sonnet, Claude 3 Haiku (requiere API key)",
+            "Azure OpenAI — endpoint propio con modelo desplegado (requiere API key y endpoint)"
+          ],
+          "default": "github-copilot",
+          "description": "Proveedor de IA para el análisis. GitHub Copilot no requiere API key adicional."
+        },
+        "syntaxis.ai.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Modelo a usar para el análisis. Ejemplos: gpt-4o, gpt-4o-mini, claude-3-5-haiku-latest. Ignorado para GitHub Copilot (se selecciona automáticamente)."
+        },
+        "syntaxis.ai.azureEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "URL base del endpoint de Azure OpenAI. Ej: https://mi-recurso.openai.azure.com. Solo requerido para provider azure-openai."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "node esbuild.js",
