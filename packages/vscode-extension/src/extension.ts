@@ -1,5 +1,5 @@
 // packages/vscode-extension/src/extension.ts
-// v0.8.0: dual-mode analysis — Análisis Estático (offline) + Análisis con IA (LLM)
+// v0.10.0: fix integración IA (Copilot Chat), selector de modelo dinámico, propagación de errores
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -545,6 +545,58 @@ function aiResultToReport(
   };
 }
 
+// Lista de modelos externos para el selector (QuickPick)
+const EXTERNAL_MODELS: Record<string, Array<{ id: string; label: string }>> = {
+  openai: [
+    { id: 'gpt-4o',       label: 'GPT-4o — más potente' },
+    { id: 'gpt-4o-mini',  label: 'GPT-4o mini — rápido y económico' },
+    { id: 'gpt-4-turbo',  label: 'GPT-4 Turbo' },
+    { id: 'gpt-4.1',      label: 'GPT-4.1' },
+    { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' },
+    { id: 'gpt-4.1-nano', label: 'GPT-4.1 nano — ultra económico' },
+    { id: 'o1',           label: 'o1 — razonamiento avanzado' },
+    { id: 'o1-mini',      label: 'o1-mini' },
+    { id: 'o3',           label: 'o3 — razonamiento de alta capacidad' },
+    { id: 'o3-mini',      label: 'o3-mini' },
+    { id: 'o4-mini',      label: 'o4-mini' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6 — recomendado' },
+    { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6 — máxima capacidad' },
+    { id: 'claude-sonnet-4-5',        label: 'Claude Sonnet 4.5' },
+    { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5' },
+    { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5 — ultrarrápido' },
+    { id: 'claude-3-7-sonnet-latest', label: 'Claude 3.7 Sonnet (latest)' },
+    { id: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet (latest)' },
+    { id: 'claude-3-5-haiku-latest',  label: 'Claude 3.5 Haiku (latest)' },
+    { id: 'claude-3-opus-latest',     label: 'Claude 3 Opus (latest)' },
+  ],
+  'azure-openai': [
+    { id: 'gpt-4o',      label: 'gpt-4o (nombre del deployment Azure)' },
+    { id: 'gpt-4o-mini', label: 'gpt-4o-mini (nombre del deployment Azure)' },
+    { id: 'gpt-4',       label: 'gpt-4 (nombre del deployment Azure)' },
+  ],
+};
+
+/** Aplica diagnostics de IA sobre el documento con los findings ya obtenidos (sin rellamar al LLM). */
+function applyAIDiagnostics(document: vscode.TextDocument, findings: Finding[]): void {
+  if (!diagnosticCollection) { return; }
+  const diags: vscode.Diagnostic[] = [];
+  for (const f of findings) {
+    if (!f.lineNumber) { continue; }
+    const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
+    const line = document.lineAt(lineIdx);
+    const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
+    const d = new vscode.Diagnostic(range,
+      `[IA][${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
+      (f.severity === 'CRÍTICA' || f.severity === 'ALTA') ? vscode.DiagnosticSeverity.Error
+        : f.severity === 'MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
+    d.source = `Syntaxis IA (${f.law})`; d.code = f.article ?? f.type;
+    diags.push(d);
+  }
+  diagnosticCollection.set(document.uri, diags);
+}
+
 function refreshDiagnostics(document: vscode.TextDocument): void {
   if (!diagnosticCollection) { return; }
   const supported = ['csharp','javascript','typescript','sql'];
@@ -563,24 +615,8 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
       try {
         const result = await analyzeWithAI(document.getText(), document.fileName, fileType, _settingsManager!);
         const findings = result.agentReports.flatMap(r => aiToFindings(r.findings));
-
-        // Guardar findings en cache para hover y reportes
         _aiFindings.set(document.uri.toString(), findings);
-
-        const diags: vscode.Diagnostic[] = [];
-        for (const f of findings) {
-          if (!f.lineNumber) { continue; }
-          const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
-          const line = document.lineAt(lineIdx);
-          const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
-          const d = new vscode.Diagnostic(range,
-            `[IA][${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
-            (f.severity === 'CRÍTICA' || f.severity === 'ALTA') ? vscode.DiagnosticSeverity.Error
-              : f.severity === 'MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
-          d.source = `Syntaxis IA (${f.law})`; d.code = f.article ?? f.type;
-          diags.push(d);
-        }
-        diagnosticCollection?.set(document.uri, diags);
+        applyAIDiagnostics(document, findings);
       } catch { /* silencioso en diagnósticos automáticos */ }
     });
     return;
@@ -622,15 +658,16 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   } catch { /* logo opcional */ }
 
-  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.8.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.10.0 — Ley 21.719 + Ley 21.663');
   getOutput().appendLine('   Modo: ' + (_settingsManager.getAnalysisMode() === 'ai' ? '🤖 Análisis con IA' : '🔍 Análisis Estático'));
 
-  // Debounce diagnósticos (800ms — para AI se aumenta a 2s para no saturar la API)
+  // En modo AI no disparar análisis automático en cada keystroke (satura el LLM).
+  // El usuario analiza on-demand con los comandos Syntaxis.
   let timer: NodeJS.Timeout | undefined;
   const debouncedRefresh = (doc: vscode.TextDocument) => {
+    if (_settingsManager?.getAnalysisMode() === 'ai') { return; }
     if (timer) { clearTimeout(timer); }
-    const delay = _settingsManager?.getAnalysisMode() === 'ai' ? 2000 : 800;
-    timer = setTimeout(() => refreshDiagnostics(doc), delay);
+    timer = setTimeout(() => refreshDiagnostics(doc), 800);
   };
 
   context.subscriptions.push(
@@ -713,8 +750,10 @@ export function activate(context: vscode.ExtensionContext): void {
             const fileType = ed.document.languageId as any;
             const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
             const report = aiResultToReport(result, ed.document.fileName);
-            _aiFindings.set(ed.document.uri.toString(), report.agentReports.flatMap(a => a.findings));
-            refreshDiagnostics(ed.document);
+            const aiFindings = report.agentReports.flatMap(a => a.findings);
+            _aiFindings.set(ed.document.uri.toString(), aiFindings);
+            // Aplicar diagnostics directamente — sin llamar refreshDiagnostics (evita doble request al LLM)
+            applyAIDiagnostics(ed.document, aiFindings);
             printReport(report);
             notify(report);
           } catch (err: any) {
@@ -1016,11 +1055,27 @@ export function activate(context: vscode.ExtensionContext): void {
         async () => {
           try {
             if (provider === 'github-copilot') {
-              const models = await (vscode.lm as any).selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
-              if (models?.length > 0) {
-                vscode.window.showInformationMessage('✅ GitHub Copilot disponible y listo para análisis.');
+              if (!vscode.lm || typeof (vscode.lm as any).selectChatModels !== 'function') {
+                vscode.window.showWarningMessage(
+                  '⚠️ VS Code Language Model API no disponible. Actualiza VS Code a 1.93+ y asegúrate de tener GitHub Copilot Chat instalado.'
+                );
+                return;
+              }
+              let foundFamily: string | undefined;
+              for (const family of ['gpt-4o', 'gpt-4o-mini', 'gpt-4', 'claude-3-5-sonnet', 'claude-3-7-sonnet']) {
+                const models = await (vscode.lm as any).selectChatModels({ vendor: 'copilot', family });
+                if (models?.length > 0) { foundFamily = family; break; }
+              }
+              if (foundFamily) {
+                vscode.window.showInformationMessage(`✅ GitHub Copilot Chat disponible — modelo activo: ${foundFamily}`);
               } else {
-                vscode.window.showWarningMessage('⚠️ GitHub Copilot no encontrado. Verifica que tienes Copilot activo y estás autenticado en VS Code.');
+                vscode.window.showWarningMessage(
+                  '⚠️ GitHub Copilot Chat no encontró modelos disponibles. ' +
+                  'Verifica que la extensión "GitHub Copilot Chat" (no solo Copilot inline) está instalada, ' +
+                  'estás autenticado en VS Code y tu plan incluye acceso al Chat. ' +
+                  'Usa el comando "Syntaxis: Seleccionar modelo de IA" para ver modelos disponibles.',
+                  'Seleccionar modelo'
+                ).then(a => { if (a) { vscode.commands.executeCommand('syntaxis.selectAIModel'); } });
               }
               return;
             }
@@ -1064,6 +1119,57 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     })
   );
+  // ── Comando: Seleccionar modelo de IA ──────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand('syntaxis.selectAIModel', async () => {
+      const settings = _settingsManager!;
+      const provider = settings.getAIProvider();
+      let items: vscode.QuickPickItem[];
+
+      if (provider === 'github-copilot') {
+        if (!vscode.lm || typeof (vscode.lm as any).selectChatModels !== 'function') {
+          vscode.window.showWarningMessage('VS Code Language Model API no disponible. Requiere VS Code 1.93+ con GitHub Copilot Chat.');
+          return;
+        }
+        // Descubrimiento dinámico: obtener TODOS los modelos disponibles en la suscripción
+        const allModels = await (vscode.lm as any).selectChatModels({ vendor: 'copilot' });
+        if (!allModels?.length) {
+          vscode.window.showWarningMessage(
+            'No se encontraron modelos de GitHub Copilot Chat. Verifica que la extensión está instalada y autenticada.'
+          );
+          return;
+        }
+        items = [
+          { label: 'auto', description: 'Selección automática: gpt-4o → gpt-4o-mini → gpt-4 → claude-3-5-sonnet', picked: settings.getAIModel() === 'auto' },
+          ...allModels.map((m: any) => ({
+            label: m.family ?? m.id ?? m.name,
+            description: `${m.vendor ?? 'copilot'} · max tokens: ${m.maxInputTokens ?? '?'}`,
+            picked: settings.getAIModel() === (m.family ?? m.id),
+          })),
+        ];
+      } else {
+        const modelList = EXTERNAL_MODELS[provider] ?? [];
+        items = modelList.map(m => ({
+          label: m.id,
+          description: m.label,
+          picked: settings.getAIModel() === m.id,
+        }));
+      }
+
+      const chosen = await vscode.window.showQuickPick(items, {
+        title: `Syntaxis: Seleccionar modelo — ${provider}`,
+        placeHolder: 'Elige el modelo para el análisis de compliance con IA',
+        matchOnDescription: true,
+      });
+
+      if (chosen) {
+        await vscode.workspace.getConfiguration('syntaxis').update('ai.model', chosen.label, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`✅ Modelo configurado: ${chosen.label}`);
+        getOutput().appendLine(`   ⚙️  Modelo IA actualizado: ${chosen.label} (${provider})`);
+      }
+    })
+  );
+
 }
 
 export function deactivate(): void {
@@ -1135,7 +1241,11 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     const citationBlock = f.citation
       ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n\n**❓ ¿Por qué debería implementar esta corrección?**\n\n${f.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
-    const promptBlock = `<details><summary>🤖 Prompt sugerido para corregir con IA</summary>\n\n\`\`\`\n${buildSuggestedPrompt(f)}\n\`\`\`\n</details>`;
+    const mdPrompt = f.suggestedPrompt ?? buildSuggestedPrompt(f);
+    const mdPromptLabel = f.suggestedPrompt
+      ? '🤖 Prompt sugerido para corregir con IA (generado por IA)'
+      : '🤖 Prompt sugerido para corregir con IA';
+    const promptBlock = `<details><summary>${mdPromptLabel}</summary>\n\n\`\`\`\n${mdPrompt}\n\`\`\`\n</details>`;
     return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}\n${promptBlock}`;
   }).join('\n');
 

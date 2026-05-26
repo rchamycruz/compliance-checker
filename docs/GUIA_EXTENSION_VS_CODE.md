@@ -30,7 +30,7 @@ npm --version
 # Esperado: 8.0.0 o superior
 
 # 3. VS Code (descargar desde https://code.visualstudio.com/)
-# Versión: 1.60.0 o superior
+# Versión: 1.93.0 o superior
 
 # 4. Git (opcional pero recomendado)
 git --version

@@ -2,8 +2,8 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.8.0-blue)](https://github.com/rchamycruz/compliance-checker)
-[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.90.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
+[![Version](https://img.shields.io/badge/versión-0.10.0-blue)](https://github.com/rchamycruz/compliance-checker)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.93.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
 [![Syntaxis Spa](https://img.shields.io/badge/Syntaxis%20Spa-syntaxis.cl-6366f1)](https://www.syntaxis.cl)
@@ -14,12 +14,14 @@ Desarrollado por **[Syntaxis Spa](https://www.syntaxis.cl)** — Ingeniería de 
 
 ## ¿Qué hace esta extensión?
 
-**Syntaxis Compliance Checker** analiza tu código y detecta vulnerabilidades legales y de seguridad según la normativa chilena vigente. A partir de la **v0.8.0**, soporta dos modos de análisis:
+**Syntaxis Compliance Checker** analiza tu código y detecta vulnerabilidades legales y de seguridad según la normativa chilena vigente. A partir de la **v0.10.0**, soporta dos modos de análisis:
 
 | Modo | Descripción | Requisito |
 |---|---|---|
 | 🔍 **Análisis Estático** *(default)* | Reglas deterministas offline, instantáneo | Ninguno |
-| 🤖 **Análisis con IA** | Agentes LLM especializados por ley, comprensión semántica profunda | GitHub Copilot o API key |
+| 🤖 **Análisis con IA** | Agentes LLM especializados por ley, comprensión semántica profunda | **GitHub Copilot Chat** o API key |
+
+> ⚠️ **Importante**: el modo IA con GitHub Copilot requiere la extensión **GitHub Copilot Chat** (`github.copilot-chat`), **no** solo GitHub Copilot (completions inline). Son dos extensiones distintas.
 
 En ambos modos, los problemas aparecen **subrayados directamente en el código** (como errores de TypeScript), con descripción del problema, artículo de ley infringido y recomendación de corrección.
 
@@ -32,10 +34,10 @@ En ambos modos, los problemas aparecen **subrayados directamente en el código**
 
 ## Requisitos
 
-- **VS Code** 1.90 o superior
+- **VS Code** 1.93 o superior
 - **Node.js** 18 o superior (para compilar desde fuentes)
 - Archivos `.cs`, `.ts`, `.js` o `.sql` en el workspace
-- GitHub Copilot activo **o** API key de OpenAI/Anthropic *(solo para modo IA)*
+- **GitHub Copilot Chat** activo (`github.copilot-chat`) **o** API key de OpenAI/Anthropic *(solo para modo IA)*
 
 ---
 
@@ -54,10 +56,10 @@ npm run compile
 
 # 3. Empaquetar
 npm run package
-# Genera: syntaxis-compliance-checker-0.8.0.vsix
+# Genera: syntaxis-compliance-checker-0.10.0.vsix
 
 # 4. Instalar en VS Code
-code --install-extension syntaxis-compliance-checker-0.8.0.vsix
+code --install-extension syntaxis-compliance-checker-0.10.0.vsix
 ```
 
 ### Opción B — Desde la UI de VS Code
@@ -90,7 +92,7 @@ La extensión analiza automáticamente al abrir o editar cualquier archivo `.cs`
 - **Subrayados en amarillo** (severidad MEDIA)
 - En el panel **Problemas** (`Ctrl+Shift+M`)
 
-En modo IA el análisis aplica un debounce de 2 segundos (vs 800ms en modo estático) para no saturar la API.
+En modo IA el análisis **no se ejecuta automáticamente** (requiere comando explícito para no saturar la API). En modo estático se aplica un debounce de 800ms al editar.
 
 ### Comandos disponibles
 
@@ -101,8 +103,9 @@ Accede con `Ctrl+Shift+P` y escribe `Syntaxis`:
 | `Syntaxis: Revisar archivo actual` | Analiza el archivo abierto y muestra resultados en el panel de salida |
 | `Syntaxis: Revisar workspace completo` | Analiza todos los archivos `.cs/.ts/.js/.sql` del proyecto |
 | `Syntaxis: Generar reporte` | Genera reporte en formato JSON, HTML y/o Markdown |
+| `Syntaxis: Seleccionar modelo de IA` | **NUEVO** — QuickPick con modelos disponibles (Copilot: detectados dinámicamente) |
 | `Syntaxis: Configurar API Key de IA` | Guarda tu API key de forma segura (SecretStorage) |
-| `Syntaxis: Verificar conexión con IA` | Testea la conexión al proveedor de IA configurado |
+| `Syntaxis: Verificar conexión con IA` | Testea la conexión y reporta qué modelo Copilot está disponible |
 
 ---
 
@@ -121,25 +124,29 @@ Abre Settings (`Ctrl+,`) y busca **Syntaxis** para ver todas las opciones.
 | Setting | Descripción | Default |
 |---|---|---|
 | `syntaxis.ai.provider` | Proveedor de IA | `github-copilot` |
-| `syntaxis.ai.model` | Modelo a usar | `gpt-4o-mini` |
+| `syntaxis.ai.model` | Modelo preferido (ver lista abajo) | `auto` |
 | `syntaxis.ai.azureEndpoint` | URL del endpoint Azure OpenAI | *(vacío)* |
 
-### Proveedores de IA disponibles
+### Proveedores y modelos disponibles
 
-| Proveedor | API Key | Cómo configurar |
+| Proveedor | API Key | Modelos |
 |---|---|---|
-| **`github-copilot`** *(recomendado)* | ❌ No necesita | Solo requiere tener Copilot activo en VS Code |
-| `openai` | ✅ Necesita | Ejecuta `Syntaxis: Configurar API Key de IA` |
-| `anthropic` | ✅ Necesita | Ejecuta `Syntaxis: Configurar API Key de IA` |
-| `azure-openai` | ✅ Necesita | Configura también `syntaxis.ai.azureEndpoint` |
+| **`github-copilot`** *(recomendado)* | ❌ No necesita | Detectados dinámicamente según tu suscripción. Usa `Syntaxis: Seleccionar modelo de IA` para ver los disponibles. |
+| `openai` | ✅ Necesita | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `o1`, `o3`, `o4-mini`, y más |
+| `anthropic` | ✅ Necesita | `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-4-5`, `claude-3-7-sonnet-latest`, y más |
+| `azure-openai` | ✅ Necesita | Nombre del deployment en tu recurso Azure |
 
+> **GitHub Copilot Chat**: requiere la extensión `github.copilot-chat` instalada y activa (distinta a `github.copilot`).
 > 🔐 Las API keys se almacenan en **VS Code SecretStorage** — nunca en `settings.json` ni en disco en texto claro.
 
 ### Activar el modo IA paso a paso
 
 1. En Settings, cambia `syntaxis.analysisMode` a `ai`
 2. Elige tu proveedor en `syntaxis.ai.provider`
-3. Si usas **GitHub Copilot**: listo, no necesitas nada más
+3. Si usas **GitHub Copilot**:
+   - Instala la extensión **GitHub Copilot Chat** (si no la tienes)
+   - Ejecuta `Syntaxis: Seleccionar modelo de IA` para elegir el modelo disponible
+   - O deja `syntaxis.ai.model` en `auto` para selección automática
 4. Si usas **OpenAI/Anthropic/Azure**: ejecuta `Syntaxis: Configurar API Key de IA` e ingresa tu key
 5. (Opcional) Verifica con `Syntaxis: Verificar conexión con IA`
 
@@ -226,6 +233,17 @@ code .           # F5 para depurar
 ---
 
 ## Changelog
+
+### v0.10.0
+- 🔧 **Fix crítico**: integración con GitHub Copilot Chat ahora funciona correctamente (`extensionDependencies: github.copilot-chat`)
+- 🔧 **Fix crítico**: errores de Copilot ya no se silencian — el usuario ve mensajes de error accionables
+- 🔧 **Fix**: API de streaming corregida a `response.text` (VS Code 1.93+ LM API)
+- 🔧 **Fix**: eliminada doble llamada a `analyzeWithAI` en `Revisar archivo actual` (2× costo/latencia)
+- 🆕 **Nuevo comando**: `Syntaxis: Seleccionar modelo de IA` — QuickPick dinámico con modelos reales de la suscripción Copilot
+- 🆕 **Selector de modelos completo**: enum con todos los modelos OpenAI (`gpt-4.1`, `o3`, `o4-mini`) y Anthropic (`claude-sonnet-4-6`, `claude-opus-4-6`, `claude-sonnet-4-5`, etc.)
+- 🆕 **Modelo preferido para Copilot**: `syntaxis.ai.model` ahora aplica como preferencia con fallback automático
+- 🔧 **Fix**: `Verificar conexión con IA` prueba todas las familias de modelos (no solo `gpt-4o`)
+- 🔧 **Fix**: modo AI ya no dispara análisis automático en cada keystroke
 
 ### v0.8.0
 - 🤖 **Modo Análisis con IA**: agentes LLM especializados por ley con sistema de Skills

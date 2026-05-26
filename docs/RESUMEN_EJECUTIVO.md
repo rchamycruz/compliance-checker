@@ -278,9 +278,14 @@ Costo compliance/PR      $$       $          -50%
 
 ### Q1 (Semanas 1-6): Foundation
 - [x] Plan & Architecture (COMPLETADO)
-- [ ] Setup proyecto base
-- [ ] Implementar Skill 1-3
-- [ ] Agente base class
+- [x] Setup proyecto base (COMPLETADO)
+- [x] DPA Agent + CSA Agent (COMPLETADO)
+- [x] VS Code Extension v0.9.0 — Análisis Estático + Modo IA (COMPLETADO)
+- [x] **v0.10.0** — Fix integración Copilot Chat, selector de modelo dinámico (COMPLETADO)
+  - extensionDependencies: github.copilot-chat
+  - Propagación de errores, API streaming corregida
+  - Nuevo comando: Syntaxis: Seleccionar modelo de IA
+  - Modelos completos: GPT-4.1, o3, o4-mini, Claude Sonnet/Opus 4.5/4.6
 
 ### Q2 (Semanas 7-12): Core Agents
 - [ ] DPA Agent completo (5 skills)

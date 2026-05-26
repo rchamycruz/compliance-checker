@@ -59,11 +59,14 @@ code .
 
 ### Modo IA — Configuración
 
+> **Requisito importante**: El modo IA con GitHub Copilot requiere la extensión **GitHub Copilot Chat** (`github.copilot-chat`), no solo GitHub Copilot (completions inline). Son dos extensiones distintas.
+
 1. Abre Settings de VS Code (`Ctrl+,`) y busca **Syntaxis**
 2. Cambia `syntaxis.analysisMode` → `ai`
 3. Elige tu proveedor en `syntaxis.ai.provider`:
-   - **`github-copilot`** *(default)* — sin API key extra, usa tu suscripción Copilot
+   - **`github-copilot`** *(default)* — sin API key extra, usa tu suscripción Copilot Chat
    - `openai` / `anthropic` / `azure-openai` — ejecuta `Syntaxis: Configurar API Key de IA`
+4. **(Opcional)** Elige el modelo con `Syntaxis: Seleccionar modelo de IA`
 
 ### Comandos VS Code
 
@@ -76,16 +79,26 @@ Análisis:
   Syntaxis: Generar reporte de compliance
 
 Configuración IA:
+  Syntaxis: Seleccionar modelo de IA        ← NUEVO: selector dinámico de modelos
   Syntaxis: Configurar API Key de IA
   Syntaxis: Verificar conexión con IA
 ```
+
+### Modelos soportados
+
+| Proveedor | Modelos |
+|-----------|---------|
+| **GitHub Copilot Chat** | Se detectan automáticamente (depende de tu suscripción). Usa `Syntaxis: Seleccionar modelo de IA` para ver los disponibles. |
+| **OpenAI** | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `o1`, `o3`, `o4-mini`, y más |
+| **Anthropic** | `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-sonnet-4-5`, `claude-opus-4-5`, `claude-haiku-4-5`, `claude-3-7-sonnet-latest`, y más |
+| **Azure OpenAI** | Nombre del deployment en tu recurso Azure |
 
 ## 📋 Requisitos
 
 - Node.js 18+
 - npm 8+
-- VS Code 1.90+ (para modo IA con GitHub Copilot)
-- GitHub Copilot activo **o** API key de OpenAI/Anthropic (solo para modo IA)
+- VS Code 1.93+ (para modo IA con GitHub Copilot Chat)
+- **GitHub Copilot Chat** activo (extensión `github.copilot-chat`) **o** API key de OpenAI/Anthropic (solo para modo IA)
 
 ## 🤖 Sistema de Skills (Modo IA)
 

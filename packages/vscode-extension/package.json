@@ -1,7 +1,7 @@
 {
   "name": "syntaxis-compliance-checker",
   "displayName": "Syntaxis Compliance Checker",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real — Análisis Estático + Análisis con IA",
   "author": "Syntaxis SPA",
   "license": "MIT",
@@ -10,8 +10,9 @@
     "type": "git",
     "url": "https://github.com/rchamycruz/compliance-checker"
   },
+  "extensionDependencies": ["github.copilot-chat"],
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "Linters",
@@ -46,7 +47,11 @@
         "category": "Syntaxis"
       },
       {
-        "command": "syntaxis.configureApiKey",
+        "command": "syntaxis.selectAIModel",
+        "title": "Seleccionar modelo de IA",
+        "category": "Syntaxis"
+      },
+      {
         "title": "Configurar API Key de IA",
         "category": "Syntaxis"
       },
@@ -83,8 +88,40 @@
         },
         "syntaxis.ai.model": {
           "type": "string",
-          "default": "gpt-4o-mini",
-          "description": "Modelo a usar para el análisis. Ejemplos: gpt-4o, gpt-4o-mini, claude-3-5-haiku-latest. Ignorado para GitHub Copilot (se selecciona automáticamente)."
+          "default": "auto",
+          "markdownDescription": "Modelo a usar para el análisis con IA. Usa `auto` para selección automática (Copilot) o elige un modelo de la lista. También puedes escribir el ID exacto de cualquier modelo. Usa el comando _Syntaxis: Seleccionar modelo de IA_ para ver los modelos realmente disponibles en tu suscripción.",
+          "enum": [
+            "auto",
+            "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+            "o1", "o1-mini", "o3", "o3-mini", "o4-mini",
+            "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest",
+            "claude-3-7-sonnet-latest",
+            "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5",
+            "claude-opus-4-6", "claude-sonnet-4-6"
+          ],
+          "enumDescriptions": [
+            "Automático: prueba gpt-4o → gpt-4o-mini → gpt-4 → claude-3-5-sonnet (solo GitHub Copilot)",
+            "GPT-4o — OpenAI (Copilot o API directa)",
+            "GPT-4o mini — OpenAI (Copilot o API directa)",
+            "GPT-4 Turbo — OpenAI API",
+            "GPT-4.1 — OpenAI API",
+            "GPT-4.1 mini — OpenAI API",
+            "GPT-4.1 nano — OpenAI API",
+            "o1 — OpenAI razonamiento (Copilot o API directa)",
+            "o1-mini — OpenAI razonamiento mini",
+            "o3 — OpenAI razonamiento avanzado",
+            "o3-mini — OpenAI razonamiento compacto",
+            "o4-mini — OpenAI razonamiento (API directa)",
+            "Claude 3.5 Sonnet (latest) — Anthropic / Copilot",
+            "Claude 3.5 Haiku (latest) — Anthropic API",
+            "Claude 3 Opus (latest) — Anthropic API",
+            "Claude 3.7 Sonnet (latest) — Anthropic / Copilot",
+            "Claude Opus 4.5 — Anthropic API",
+            "Claude Sonnet 4.5 — Anthropic API",
+            "Claude Haiku 4.5 — Anthropic API",
+            "Claude Opus 4.6 — Anthropic API",
+            "Claude Sonnet 4.6 — Anthropic API"
+          ]
         },
         "syntaxis.ai.azureEndpoint": {
           "type": "string",
@@ -102,7 +139,7 @@
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.60.0",
+    "@types/vscode": "^1.93.0",
     "@types/node": "^20.0.0",
     "@types/mocha": "^10.0.0",
     "typescript": "^5.0.0",

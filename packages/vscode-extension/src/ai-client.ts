@@ -153,37 +153,58 @@ async function runAgentWithCopilot(
   fileType: string,
   agentName: string,
   law: string,
+  preferredModel?: string,
 ): Promise<AIAgentReport> {
   const t0 = Date.now();
   const truncated = code.length > 12000 ? code.substring(0, 12000) + '\n// [truncado]' : code;
   const userPrompt = `Archivo: ${filePath}\nTipo: ${fileType}\n\n\`\`\`${fileType}\n${truncated}\n\`\`\`\n\nAnaliza y responde con el JSON array incluyendo citation y suggestedPrompt por hallazgo.`;
 
-  let findings: AIFinding[] = [];
-
-  try {
-    // Intentar modelos Copilot en orden de preferencia
-    let model: any;
-    for (const family of ['gpt-4o', 'gpt-4o-mini', 'gpt-4', 'claude-3-5-sonnet']) {
-      const models = await (vscode.lm as any).selectChatModels({ vendor: 'copilot', family });
-      if (models?.length > 0) { model = models[0]; break; }
-    }
-    if (!model) { throw new Error('GitHub Copilot no disponible'); }
-
-    const combinedPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
-    const messages = [vscode.LanguageModelChatMessage.User(combinedPrompt)];
-    const response = await model.sendRequest(messages, {});
-
-    const chunks: string[] = [];
-    for await (const part of response) {
-      const text = part?.value ?? part?.text ?? '';
-      if (text) { chunks.push(text); }
-    }
-    findings = extractAndParseFindings(chunks.join(''), filePath, law);
-  } catch {
-    findings = [];
+  if (!vscode.lm || typeof (vscode.lm as any).selectChatModels !== 'function') {
+    throw new Error(
+      'VS Code Language Model API no disponible. Requiere VS Code 1.93+ con GitHub Copilot Chat activo.',
+    );
   }
 
-  return buildAgentReport(agentName, law, findings, Date.now() - t0);
+  // Respetar modelo configurado; si es "auto" o no está disponible, hacer fallback
+  const FALLBACK_FAMILIES = ['gpt-4o', 'gpt-4o-mini', 'gpt-4', 'claude-3-5-sonnet'];
+  const familiesToTry = (preferredModel && preferredModel !== 'auto')
+    ? [preferredModel, ...FALLBACK_FAMILIES.filter(f => f !== preferredModel)]
+    : FALLBACK_FAMILIES;
+
+  let model: any;
+  let usedFamily: string | undefined;
+  for (const family of familiesToTry) {
+    const models = await (vscode.lm as any).selectChatModels({ vendor: 'copilot', family });
+    if (models?.length > 0) { model = models[0]; usedFamily = family; break; }
+  }
+
+  if (!model) {
+    throw new Error(
+      'GitHub Copilot Chat no encontró modelos disponibles. ' +
+      'Verifica que la extensión "GitHub Copilot Chat" está instalada y activa, ' +
+      'que estás autenticado y que tu plan incluye acceso al Chat.',
+    );
+  }
+
+  // Logear modelo activo en output channel
+  try {
+    const out = (vscode as any).__outputChannel;
+    if (out?.appendLine) { out.appendLine(`   🤖 Copilot: ${usedFamily}`); }
+  } catch { /* output channel opcional */ }
+
+  const combinedPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
+  const messages = [vscode.LanguageModelChatMessage.User(combinedPrompt)];
+  const response = await model.sendRequest(messages, {});
+
+  const chunks: string[] = [];
+  // API correcta VS Code 1.93+: response.text es AsyncIterable<string>
+  const stream = response?.text ?? response;
+  for await (const fragment of stream) {
+    const text = typeof fragment === 'string' ? fragment : (fragment?.value ?? fragment?.text ?? '');
+    if (text) { chunks.push(text); }
+  }
+
+  return buildAgentReport(agentName, law, extractAndParseFindings(chunks.join(''), filePath, law), Date.now() - t0);
 }
 
 async function runAgentWithExternalProvider(
@@ -311,7 +332,7 @@ export async function analyzeWithAI(
 
   const runAgent = (systemPrompt: string, agentName: string, law: string) =>
     provider === 'github-copilot'
-      ? runAgentWithCopilot(systemPrompt, code, filePath, fileType, agentName, law)
+      ? runAgentWithCopilot(systemPrompt, code, filePath, fileType, agentName, law, model)
       : runAgentWithExternalProvider(
           systemPrompt, code, filePath, fileType, agentName, law,
           provider, apiKey, model, azureEndpt,
