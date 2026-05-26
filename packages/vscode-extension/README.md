@@ -2,7 +2,7 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.10.0-blue)](https://github.com/rchamycruz/compliance-checker)
+[![Version](https://img.shields.io/badge/versión-0.10.1-blue)](https://github.com/rchamycruz/compliance-checker)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.93.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
@@ -14,7 +14,7 @@ Desarrollado por **[Syntaxis Spa](https://www.syntaxis.cl)** — Ingeniería de 
 
 ## ¿Qué hace esta extensión?
 
-**Syntaxis Compliance Checker** analiza tu código y detecta vulnerabilidades legales y de seguridad según la normativa chilena vigente. A partir de la **v0.10.0**, soporta dos modos de análisis:
+**Syntaxis Compliance Checker** analiza tu código y detecta vulnerabilidades legales y de seguridad según la normativa chilena vigente. A partir de la **v0.8.0**, soporta dos modos de análisis:
 
 | Modo | Descripción | Requisito |
 |---|---|---|
@@ -56,10 +56,10 @@ npm run compile
 
 # 3. Empaquetar
 npm run package
-# Genera: syntaxis-compliance-checker-0.10.0.vsix
+# Genera: syntaxis-compliance-checker-0.10.1.vsix
 
 # 4. Instalar en VS Code
-code --install-extension syntaxis-compliance-checker-0.10.0.vsix
+code --install-extension syntaxis-compliance-checker-0.10.1.vsix
 ```
 
 ### Opción B — Desde la UI de VS Code
@@ -159,6 +159,8 @@ Al ejecutar **"Generar reporte"**, la extensión pregunta:
 1. **¿Qué analizar?** → Archivo actual o Workspace completo
 2. **¿Formato?** → JSON / HTML / Markdown / Todos
 
+Ambas opciones respetan el **modo de análisis configurado** (`syntaxis.analysisMode`): si está en modo IA, tanto el análisis de archivo individual como el de workspace completo utilizan los agentes LLM. El progreso muestra `[IA]` por archivo cuando el modo IA está activo.
+
 Los reportes se guardan en `compliance-reports/` dentro del workspace:
 
 ```
@@ -233,6 +235,11 @@ code .           # F5 para depurar
 ---
 
 ## Changelog
+
+### v0.10.1
+- 🔧 **Fix**: `Generar reporte → Workspace completo` ahora usa el modo IA cuando `syntaxis.analysisMode` es `ai` (antes siempre usaba REGEX independiente de la configuración)
+- 🔧 **Fix**: el campo `generatedBy` del reporte consolidado refleja `[IA]` cuando el análisis se realizó con IA
+- 🔧 **Fix**: progreso por archivo muestra indicador `[IA]` en modo IA para workspace completo
 
 ### v0.10.0
 - 🔧 **Fix crítico**: integración con GitHub Copilot Chat ahora funciona correctamente (`extensionDependencies: github.copilot-chat`)
