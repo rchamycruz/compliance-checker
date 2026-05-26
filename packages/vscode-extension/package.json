@@ -1,8 +1,8 @@
 {
   "name": "syntaxis-compliance-checker",
   "displayName": "Syntaxis Compliance Checker",
-  "version": "0.7.0",
-  "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real",
+  "version": "0.8.0",
+  "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real — Análisis Estático + Análisis con IA",
   "author": "Syntaxis SPA",
   "license": "MIT",
   "publisher": "syntaxis",
