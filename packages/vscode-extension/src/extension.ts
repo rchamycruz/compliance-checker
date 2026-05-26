@@ -886,23 +886,35 @@ export function activate(context: vscode.ExtensionContext): void {
               }
             }
 
+            if (aiMode) {
+              const { valid, reason } = await _settingsManager!.validateAIConfig();
+              if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+            }
+
             let totalCrit = 0, totalHigh = 0, totalMedia = 0, totalBaja = 0, totalFinds = 0;
             const allAgentReports: Report['agentReports'] = [];
             const allPassingChecks: PassingCheck[] = [];
             const allFiles: string[] = [];
 
             for (let i = 0; i < files.length; i++) {
-              progress.report({ message: `${i + 1}/${files.length}: ${path.basename(files[i].fsPath)}` });
+              progress.report({ message: `${i + 1}/${files.length}: ${path.basename(files[i].fsPath)}${aiMode ? ' [IA]' : ''}` });
               try {
                 const doc = await vscode.workspace.openTextDocument(files[i]);
-                const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
+                let r: Report;
+                if (aiMode) {
+                  const fileType = doc.languageId as any;
+                  const aiResult = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
+                  r = aiResultToReport(aiResult, files[i].fsPath, { generatedBy: `${generatedBy} [IA]` });
+                } else {
+                  r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
+                }
                 totalCrit  += r.criticalFindings;
                 totalHigh  += r.highFindings;
                 totalMedia += r.agentReports.flatMap(a=>a.findings).filter(f=>f.severity==='MEDIA').length;
                 totalBaja  += r.agentReports.flatMap(a=>a.findings).filter(f=>f.severity==='BAJA').length;
                 totalFinds += r.totalFindings;
                 allFiles.push(files[i].fsPath);
-                allPassingChecks.push(...r.passingChecks);
+                allPassingChecks.push(...(r.passingChecks ?? []));
                 // Merge agent findings
                 r.agentReports.forEach((ar, idx) => {
                   if (!allAgentReports[idx]) {
@@ -934,7 +946,7 @@ export function activate(context: vscode.ExtensionContext): void {
               lowFindings: totalBaja,
               blockMerge: totalCrit > 0,
               recommendations: [],
-              generatedBy,
+              generatedBy: aiMode ? `${generatedBy} [IA]` : generatedBy,
               passingChecks: allPassingChecks,
               agentReports: allAgentReports,
             };

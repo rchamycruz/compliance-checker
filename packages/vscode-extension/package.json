@@ -1,7 +1,7 @@
 {
   "name": "syntaxis-compliance-checker",
   "displayName": "Syntaxis Compliance Checker",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real — Análisis Estático + Análisis con IA",
   "author": "Syntaxis SPA",
   "license": "MIT",
@@ -10,7 +10,9 @@
     "type": "git",
     "url": "https://github.com/rchamycruz/compliance-checker"
   },
-  "extensionDependencies": ["github.copilot-chat"],
+  "extensionDependencies": [
+    "github.copilot-chat"
+  ],
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -66,7 +68,10 @@
       "properties": {
         "syntaxis.analysisMode": {
           "type": "string",
-          "enum": ["static", "ai"],
+          "enum": [
+            "static",
+            "ai"
+          ],
           "enumDescriptions": [
             "Análisis Estático: reglas deterministas, rápido, sin conexión a internet",
             "Análisis con IA: agentes LLM especializados por ley, mayor profundidad semántica"
@@ -76,7 +81,12 @@
         },
         "syntaxis.ai.provider": {
           "type": "string",
-          "enum": ["github-copilot", "openai", "anthropic", "azure-openai"],
+          "enum": [
+            "github-copilot",
+            "openai",
+            "anthropic",
+            "azure-openai"
+          ],
           "enumDescriptions": [
             "GitHub Copilot — usa tu suscripción activa de Copilot (sin API key adicional)",
             "OpenAI — GPT-4o, GPT-4o-mini, o1-mini (requiere API key)",
@@ -92,12 +102,26 @@
           "markdownDescription": "Modelo a usar para el análisis con IA. Usa `auto` para selección automática (Copilot) o elige un modelo de la lista. También puedes escribir el ID exacto de cualquier modelo. Usa el comando _Syntaxis: Seleccionar modelo de IA_ para ver los modelos realmente disponibles en tu suscripción.",
           "enum": [
             "auto",
-            "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-            "o1", "o1-mini", "o3", "o3-mini", "o4-mini",
-            "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+            "claude-3-opus-latest",
             "claude-3-7-sonnet-latest",
-            "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5",
-            "claude-opus-4-6", "claude-sonnet-4-6"
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6"
           ],
           "enumDescriptions": [
             "Automático: prueba gpt-4o → gpt-4o-mini → gpt-4 → claude-3-5-sonnet (solo GitHub Copilot)",
