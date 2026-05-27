@@ -1,7 +1,7 @@
 {
   "name": "syntaxis-compliance-checker",
   "displayName": "Syntaxis Compliance Checker",
-  "version": "0.11.0",
+  "version": "0.13.0",
   "description": "Revisa código contra Leyes 21.719 y 21.663 en tiempo real — Análisis Estático + Análisis con IA",
   "author": "Syntaxis SPA",
   "license": "MIT",
@@ -61,6 +61,17 @@
         "command": "syntaxis.testAiConnection",
         "title": "Verificar conexión con IA",
         "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.suggestAIFix",
+        "title": "Sugerir corrección con IA (copiar prompt)",
+        "category": "Syntaxis"
+      },
+      {
+        "command": "syntaxis.stopAnalysis",
+        "title": "Detener análisis en curso",
+        "category": "Syntaxis",
+        "icon": "$(debug-stop)"
       }
     ],
     "configuration": {
@@ -151,6 +162,31 @@
           "type": "string",
           "default": "",
           "description": "URL base del endpoint de Azure OpenAI. Ej: https://mi-recurso.openai.azure.com. Solo requerido para provider azure-openai."
+        },
+        "syntaxis.display.showResolved": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mostrar los **controles resueltos OK** (✅) en reportes y diagnósticos. Desactívalo para reducir ruido visual y consumo de tokens con IA."
+        },
+        "syntaxis.display.showCritical": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mostrar hallazgos de severidad **🔴 CRÍTICA** en reportes y diagnósticos."
+        },
+        "syntaxis.display.showHigh": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mostrar hallazgos de severidad **🟠 ALTA** en reportes y diagnósticos."
+        },
+        "syntaxis.display.showMedium": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mostrar hallazgos de severidad **🟡 MEDIA** en reportes y diagnósticos."
+        },
+        "syntaxis.display.showLow": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Mostrar hallazgos de severidad **🔵 BAJA** en reportes y diagnósticos."
         }
       }
     }

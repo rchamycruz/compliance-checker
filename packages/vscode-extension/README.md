@@ -2,7 +2,7 @@
 
 > Análisis automático de cumplimiento normativo para las leyes chilenas **Ley 21.719** (Protección de Datos Personales) y **Ley 21.663** (Marco de Ciberseguridad) — directamente en tu editor.
 
-[![Version](https://img.shields.io/badge/versión-0.11.0-blue)](https://github.com/rchamycruz/compliance-checker)
+[![Version](https://img.shields.io/badge/versión-0.13.0-blue)](https://github.com/rchamycruz/compliance-checker)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.93.0-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Licencia](https://img.shields.io/badge/licencia-MIT-green)](LICENSE)
 [![Repositorio](https://img.shields.io/badge/GitHub-rchamycruz%2Fcompliance--checker-181717?logo=github)](https://github.com/rchamycruz/compliance-checker)
@@ -24,6 +24,8 @@ Desarrollado por **[Syntaxis Spa](https://www.syntaxis.cl)** — Ingeniería de 
 > ⚠️ **Importante**: el modo IA con GitHub Copilot requiere la extensión **GitHub Copilot Chat** (`github.copilot-chat`), **no** solo GitHub Copilot (completions inline). Son dos extensiones distintas.
 
 En ambos modos, los problemas aparecen **subrayados directamente en el código** (como errores de TypeScript), con descripción del problema, artículo de ley infringido y recomendación de corrección.
+
+A partir de la **v0.12.0**, cada hallazgo muestra un **CodeLens** en el editor para copiar un prompt de corrección con IA con un solo clic.
 
 | Agente | Ley | ¿Qué detecta? |
 |---|---|---|
@@ -56,10 +58,10 @@ npm run compile
 
 # 3. Empaquetar
 npm run package
-# Genera: syntaxis-compliance-checker-0.11.0.vsix
+# Genera: syntaxis-compliance-checker-0.13.0.vsix
 
 # 4. Instalar en VS Code
-code --install-extension syntaxis-compliance-checker-0.11.0.vsix
+code --install-extension syntaxis-compliance-checker-0.13.0.vsix
 ```
 
 ### Opción B — Desde la UI de VS Code
@@ -103,9 +105,27 @@ Accede con `Ctrl+Shift+P` y escribe `Syntaxis`:
 | `Syntaxis: Revisar archivo actual` | Analiza el archivo abierto y muestra resultados en el panel de salida |
 | `Syntaxis: Revisar workspace completo` | Analiza todos los archivos `.cs/.ts/.js/.sql` del proyecto |
 | `Syntaxis: Generar reporte` | Genera reporte en formato JSON, HTML y/o Markdown |
-| `Syntaxis: Seleccionar modelo de IA` | **NUEVO** — QuickPick con modelos disponibles (Copilot: detectados dinámicamente) |
+| `Syntaxis: Seleccionar modelo de IA` | QuickPick con modelos disponibles (Copilot: detectados dinámicamente) |
 | `Syntaxis: Configurar API Key de IA` | Guarda tu API key de forma segura (SecretStorage) |
 | `Syntaxis: Verificar conexión con IA` | Testea la conexión y reporta qué modelo Copilot está disponible |
+| `Syntaxis: Sugerir corrección con IA` | **v0.12.0** — Copia el prompt de corrección del hallazgo al portapapeles *(también disponible como CodeLens en el editor)* |
+| `Syntaxis: Detener análisis en curso` | **v0.13.0** — Detiene el análisis workspace en curso y guarda un reporte parcial bien formateado |
+
+### CodeLens — Sugerir corrección con IA
+
+A partir de la **v0.12.0**, cada hallazgo detectado (🔴 CRÍTICA / 🟠 ALTA / 🟡 MEDIA / 🔵 BAJA) muestra un botón **CodeLens** directamente sobre la línea problemática en el editor:
+
+```
+🔴 Sugerir corrección con IA    ←  aparece sobre la línea con el problema
+```
+
+Al hacer clic:
+1. El prompt de corrección se **copia automáticamente al portapapeles**
+2. Aparece una notificación con la opción de **Abrir Copilot Chat**
+3. Pega el prompt en Copilot Chat (u otra IA) para obtener el código corregido
+
+> 💡 **¿Por qué solo en VS Code?** Los prompts generados consumen tokens de IA. Al mantenerlos en el editor en lugar de incluirlos en los reportes exportados, el acceso es **explícito y bajo demanda** — el desarrollador elige cuándo usarlos.
+> Los CodeLens **nunca aparecen** sobre controles que pasaron correctamente (✅ OK).
 
 ---
 
@@ -126,6 +146,21 @@ Abre Settings (`Ctrl+,`) y busca **Syntaxis** para ver todas las opciones.
 | `syntaxis.ai.provider` | Proveedor de IA | `github-copilot` |
 | `syntaxis.ai.model` | Modelo preferido (ver lista abajo) | `auto` |
 | `syntaxis.ai.azureEndpoint` | URL del endpoint Azure OpenAI | *(vacío)* |
+
+### Filtros de visualización *(v0.12.0)*
+
+Controla qué severidades se muestran en el editor (diagnósticos), en el Output panel y en los reportes generados. Útil para reducir el ruido visual y el consumo de tokens de IA.
+
+| Setting | Descripción | Default |
+|---|---|---|
+| `syntaxis.display.showResolved` | Mostrar controles resueltos ✅ OK | `true` |
+| `syntaxis.display.showCritical` | Mostrar hallazgos 🔴 CRÍTICA | `true` |
+| `syntaxis.display.showHigh` | Mostrar hallazgos 🟠 ALTA | `true` |
+| `syntaxis.display.showMedium` | Mostrar hallazgos 🟡 MEDIA | `true` |
+| `syntaxis.display.showLow` | Mostrar hallazgos 🔵 BAJA | `true` |
+
+> 💡 **Ejemplo de uso**: para trabajar solo en problemas críticos y no distraerse con el resto, desactiva `showHigh`, `showMedium`, `showLow` y `showResolved`. Los reportes generados también reflejarán el filtro activo e incluirán un aviso visible indicando qué está oculto.
+> Los contadores de resumen siempre muestran los totales reales (no filtrados).
 
 ### Proveedores y modelos disponibles
 
@@ -235,6 +270,19 @@ code .           # F5 para depurar
 ---
 
 ## Changelog
+
+### v0.13.0
+- 🆕 **Detener análisis en curso**: nuevo comando `Syntaxis: Detener análisis en curso` y botón **⏹ Detener análisis** en la barra de estado (visible solo durante un análisis activo)
+- 🆕 **Reporte parcial bien formateado**: al detener, se genera automáticamente el reporte con los archivos procesados hasta ese momento. El reporte incluye un banner rojo destacado indicando que es un reporte parcial detenido por el usuario, tanto en HTML como en Markdown y en el Output panel
+- 🆕 **Archivos parciales con sufijo `-parcial`**: los reportes detenidos se guardan como `compliance-FECHA-parcial.json/html/md` para diferenciarlos de reportes completos
+- 🆕 **Cancellable desde la notificación**: además del botón de status bar, el análisis de workspace también puede cancelarse con el botón "Cancelar" del toast de progreso en VS Code
+- 🔧 El botón "⏹ Detener análisis" desaparece automáticamente al terminar o cancelar el análisis
+
+### v0.12.0
+- 🆕 **CodeLens "Sugerir corrección con IA"**: aparece directamente sobre cada hallazgo en el editor (🔴 CRÍTICA / 🟠 ALTA / 🟡 MEDIA / 🔵 BAJA); al hacer clic copia el prompt al portapapeles y ofrece abrir Copilot Chat. Los controles ✅ OK **no** muestran CodeLens
+- 🆕 **Filtros de visualización**: 5 nuevas opciones en Settings (`syntaxis.display.showResolved/Critical/High/Medium/Low`) para ocultar severidades y controles resueltos en el editor, Output panel y reportes generados. Los reportes incluyen un aviso visible cuando hay filtros activos
+- 🔴 **Fix**: reporte de workspace en modo IA mostraba el badge `🔎 Análisis Estático` en lugar de `🤖 Análisis con IA` — faltaba el campo `analysisMode` en el objeto consolidado del workspace
+- 🗑️ **Prompts eliminados de reportes HTML/MD**: los prompts sugeridos ya no se incluyen en los reportes exportados (reducción de tokens). Solo están disponibles mediante CodeLens dentro de VS Code
 
 ### v0.11.0
 - 🔴 **Fix crítico**: `Revisar workspace completo` ahora respeta el modo IA — antes **siempre usaba REGEX** sin importar la configuración `syntaxis.analysisMode`; ahora llama a los agentes LLM por archivo cuando el modo es `ai`

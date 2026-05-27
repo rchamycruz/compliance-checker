@@ -1,5 +1,5 @@
 // packages/vscode-extension/src/extension.ts
-// v0.10.0: fix integración IA (Copilot Chat), selector de modelo dinámico, propagación de errores
+// v0.13.0: Cancelación de análisis en curso — botón "Detener análisis" en status bar + reportes parciales bien formateados
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -244,6 +244,7 @@ interface Report {
   analysisMode?: 'ai' | 'static'; aiErrors?: string[];
   passingChecks: PassingCheck[];
   agentReports: { agentName: string; law: string; findings: Finding[] }[];
+  wasAborted?: boolean; // true si el análisis fue detenido por el usuario antes de completarse
 }
 
 // ─── Fecha/hora local del sistema (no UTC) ────────────────────────────────────
@@ -505,8 +506,14 @@ function analyzeCode(code: string, filePath: string, opts?: { globalAuthFilter?:
 let diagnosticCollection: vscode.DiagnosticCollection | undefined;
 let _settingsManager: SettingsManager | undefined;
 
-// Cache de hallazgos de IA por URI de documento (para hover provider y reportes)
-const _aiFindings = new Map<string, Finding[]>();
+// Cache de hallazgos por URI de documento (para hover provider, CodeLens y reportes)
+const _aiFindings     = new Map<string, Finding[]>();
+const _staticFindings = new Map<string, Finding[]>();
+let _codeLensProvider: SyntaxisCodeLensProvider | undefined;
+
+// Control de cancelación de análisis en curso
+let _analysisCancelTokenSource: vscode.CancellationTokenSource | undefined;
+let _stopAnalysisButton: vscode.StatusBarItem | undefined;
 
 /** Convierte AIFinding[] de ai-client a Finding[] de extension (estructuralmente compatibles). */
 function aiToFindings(aiFindings: AIFinding[]): Finding[] {
@@ -520,6 +527,57 @@ function aiToFindings(aiFindings: AIFinding[]): Finding[] {
     citation: f.citation as LawCitation | undefined,
     suggestedPrompt: f.suggestedPrompt,
   }));
+}
+
+// ─── Filtros de visualización ─────────────────────────────────────────────────
+interface DisplayFilter {
+  showResolved: boolean;
+  showCritical: boolean;
+  showHigh:     boolean;
+  showMedium:   boolean;
+  showLow:      boolean;
+}
+const SHOW_ALL: DisplayFilter = { showResolved: true, showCritical: true, showHigh: true, showMedium: true, showLow: true };
+
+function getDisplayFilter(): DisplayFilter {
+  const cfg = vscode.workspace.getConfiguration('syntaxis.display');
+  return {
+    showResolved: cfg.get<boolean>('showResolved', true),
+    showCritical: cfg.get<boolean>('showCritical', true),
+    showHigh:     cfg.get<boolean>('showHigh', true),
+    showMedium:   cfg.get<boolean>('showMedium', true),
+    showLow:      cfg.get<boolean>('showLow', true),
+  };
+}
+
+function filterFindings(findings: Finding[], df: DisplayFilter): Finding[] {
+  return findings.filter(f => {
+    if (f.severity === 'CRÍTICA') { return df.showCritical; }
+    if (f.severity === 'ALTA')    { return df.showHigh; }
+    if (f.severity === 'MEDIA')   { return df.showMedium; }
+    if (f.severity === 'BAJA')    { return df.showLow; }
+    return true;
+  });
+}
+
+/** Inicia un análisis: crea un token de cancelación y muestra el botón "Detener análisis". */
+function beginAnalysis(): vscode.CancellationToken {
+  _analysisCancelTokenSource?.dispose();
+  _analysisCancelTokenSource = new vscode.CancellationTokenSource();
+  _stopAnalysisButton?.show();
+  return _analysisCancelTokenSource.token;
+}
+
+/** Finaliza el análisis: descarta el token y oculta el botón "Detener análisis". */
+function endAnalysis(): void {
+  _analysisCancelTokenSource?.dispose();
+  _analysisCancelTokenSource = undefined;
+  _stopAnalysisButton?.hide();
+}
+
+/** Retorna true si el análisis en curso fue cancelado por el usuario. */
+function isAnalysisCancelled(): boolean {
+  return _analysisCancelTokenSource?.token.isCancellationRequested ?? false;
 }
 
 /** Detecta controles que cumplen usando análisis estático (REGEX). Reutilizable en modo IA. */
@@ -636,8 +694,9 @@ const EXTERNAL_MODELS: Record<string, Array<{ id: string; label: string }>> = {
 /** Aplica diagnostics de IA sobre el documento con los findings ya obtenidos (sin rellamar al LLM). */
 function applyAIDiagnostics(document: vscode.TextDocument, findings: Finding[]): void {
   if (!diagnosticCollection) { return; }
+  const df = getDisplayFilter();
   const diags: vscode.Diagnostic[] = [];
-  for (const f of findings) {
+  for (const f of filterFindings(findings, df)) {
     if (!f.lineNumber) { continue; }
     const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
     const line = document.lineAt(lineIdx);
@@ -671,6 +730,7 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
         const result = await analyzeWithAI(document.getText(), document.fileName, fileType, _settingsManager!);
         const findings = result.agentReports.flatMap(r => aiToFindings(r.findings));
         _aiFindings.set(document.uri.toString(), findings);
+        _codeLensProvider?.fire();
         applyAIDiagnostics(document, findings);
       } catch (err: any) {
         vscode.window.showWarningMessage(`Syntaxis IA: Error en diagnósticos — ${err?.message ?? 'Error desconocido'}`);
@@ -681,23 +741,58 @@ function refreshDiagnostics(document: vscode.TextDocument): void {
 
   // Modo estático (default)
   const report = analyzeCode(document.getText(), document.fileName);
+  const allStaticFindings = report.agentReports.flatMap(a => a.findings);
+  _staticFindings.set(document.uri.toString(), allStaticFindings);
+  _codeLensProvider?.fire();
+
+  const df = getDisplayFilter();
   const diags: vscode.Diagnostic[] = [];
 
-  for (const ar of report.agentReports) {
-    for (const f of ar.findings) {
-      if (!f.lineNumber) { continue; }
-      const lineIdx = Math.min(f.lineNumber-1, document.lineCount-1);
-      const line = document.lineAt(lineIdx);
-      const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
-      const d = new vscode.Diagnostic(range,
-        `[${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
-        (f.severity==='CRÍTICA'||f.severity==='ALTA') ? vscode.DiagnosticSeverity.Error
-          : f.severity==='MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
-      d.source = `Syntaxis (${f.law})`; d.code = f.article ?? f.type;
-      diags.push(d);
-    }
+  for (const f of filterFindings(allStaticFindings, df)) {
+    if (!f.lineNumber) { continue; }
+    const lineIdx = Math.min(f.lineNumber-1, document.lineCount-1);
+    const line = document.lineAt(lineIdx);
+    const range = new vscode.Range(lineIdx, line.firstNonWhitespaceCharacterIndex, lineIdx, line.text.length);
+    const d = new vscode.Diagnostic(range,
+      `[${f.severity}] ${f.description}\n💡 ${f.recommendation}`,
+      (f.severity==='CRÍTICA'||f.severity==='ALTA') ? vscode.DiagnosticSeverity.Error
+        : f.severity==='MEDIA' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information);
+    d.source = `Syntaxis (${f.law})`; d.code = f.article ?? f.type;
+    diags.push(d);
   }
   diagnosticCollection.set(document.uri, diags);
+}
+
+// ─── CodeLens: "Sugerir fix con IA" por cada hallazgo en el editor ───────────
+class SyntaxisCodeLensProvider implements vscode.CodeLensProvider {
+  private _emitter = new vscode.EventEmitter<void>();
+  onDidChangeCodeLenses: vscode.Event<void> = this._emitter.event;
+
+  fire(): void { this._emitter.fire(); }
+
+  provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+    const mode = _settingsManager?.getAnalysisMode() ?? 'static';
+    let findings: Finding[];
+    if (mode === 'ai') {
+      findings = _aiFindings.get(document.uri.toString()) ?? [];
+    } else {
+      findings = _staticFindings.get(document.uri.toString()) ?? [];
+    }
+
+    const lenses: vscode.CodeLens[] = [];
+    for (const f of findings) {
+      if (!f.lineNumber) { continue; }
+      const lineIdx = Math.min(f.lineNumber - 1, document.lineCount - 1);
+      const range = new vscode.Range(lineIdx, 0, lineIdx, 0);
+      const icon = f.severity === 'CRÍTICA' ? '🔴' : f.severity === 'ALTA' ? '🟠' : f.severity === 'MEDIA' ? '🟡' : '🔵';
+      lenses.push(new vscode.CodeLens(range, {
+        title: `${icon} Sugerir corrección con IA`,
+        command: 'syntaxis.suggestAIFix',
+        arguments: [f],
+      }));
+    }
+    return lenses;
+  }
 }
 
 // ─── Activación ───────────────────────────────────────────────────────────────
@@ -707,6 +802,50 @@ export function activate(context: vscode.ExtensionContext): void {
   _settingsManager = new SettingsManager(context.secrets);
   context.subscriptions.push(diagnosticCollection);
 
+  // ── Botón "Detener análisis" en la barra de estado (visible solo durante análisis) ─
+  _stopAnalysisButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  _stopAnalysisButton.text = '$(debug-stop) Detener análisis';
+  _stopAnalysisButton.tooltip = 'Detener el análisis en curso y conservar los resultados parciales';
+  _stopAnalysisButton.command = 'syntaxis.stopAnalysis';
+  _stopAnalysisButton.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+  context.subscriptions.push(_stopAnalysisButton);
+
+  // ── Comando: detener análisis en curso ────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand('syntaxis.stopAnalysis', () => {
+      if (!_analysisCancelTokenSource || _analysisCancelTokenSource.token.isCancellationRequested) {
+        vscode.window.showInformationMessage('Syntaxis: No hay ningún análisis en curso.');
+        return;
+      }
+      _analysisCancelTokenSource.cancel();
+      vscode.window.showWarningMessage('⏹ Deteniendo análisis… se mostrarán los resultados parciales.');
+    })
+  );
+
+  // ── CodeLens: "Sugerir corrección con IA" en hallazgos CRÍTICA/ALTA/MEDIA/BAJA ──
+  _codeLensProvider = new SyntaxisCodeLensProvider();
+  context.subscriptions.push(
+    vscode.languages.registerCodeLensProvider(
+      [{ language: 'csharp' }, { language: 'javascript' }, { language: 'typescript' }, { language: 'sql' }],
+      _codeLensProvider
+    )
+  );
+
+  // ── Comando: copiar prompt de corrección con IA para un hallazgo ──────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand('syntaxis.suggestAIFix', async (finding: Finding) => {
+      const prompt = finding.suggestedPrompt ?? buildSuggestedPrompt(finding);
+      await vscode.env.clipboard.writeText(prompt);
+      const action = await vscode.window.showInformationMessage(
+        `📋 Prompt copiado al portapapeles. Pégalo en GitHub Copilot Chat u otra IA para obtener el código corregido.`,
+        'Abrir Copilot Chat'
+      );
+      if (action === 'Abrir Copilot Chat') {
+        vscode.commands.executeCommand('workbench.panel.chat.view.copilot.focus');
+      }
+    })
+  );
+
   // Cargar logo para incluirlo en reportes HTML
   try {
     const iconPath = path.join(context.extensionPath, 'icon.png');
@@ -715,7 +854,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   } catch { /* logo opcional */ }
 
-  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.10.0 — Ley 21.719 + Ley 21.663');
+  getOutput().appendLine('🔍 Syntaxis Compliance Checker v0.13.0 — Ley 21.719 + Ley 21.663');
   getOutput().appendLine('   Modo: ' + (_settingsManager.getAnalysisMode() === 'ai' ? '🤖 Análisis con IA' : '🔍 Análisis Estático'));
 
   // En modo AI no disparar análisis automático en cada keystroke (satura el LLM).
@@ -798,30 +937,39 @@ export function activate(context: vscode.ExtensionContext): void {
       const ed = vscode.window.activeTextEditor;
       if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
       const mode = _settingsManager?.getAnalysisMode() ?? 'static';
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: mode === 'ai' ? 'Syntaxis IA: Analizando...' : 'Syntaxis: Analizando...' }, async () => {
-        if (mode === 'ai') {
-          const { valid, reason } = await _settingsManager!.validateAIConfig();
-          if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
-          try {
-            const fileType = ed.document.languageId as any;
-            const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
-            const report = aiResultToReport(result, ed.document.fileName, { code: ed.document.getText() });
-            const aiFindings = report.agentReports.flatMap(a => a.findings);
-            _aiFindings.set(ed.document.uri.toString(), aiFindings);
-            // Aplicar diagnostics directamente — sin llamar refreshDiagnostics (evita doble request al LLM)
-            applyAIDiagnostics(ed.document, aiFindings);
+      const cancelToken = beginAnalysis();
+      try {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: mode === 'ai' ? 'Syntaxis IA: Analizando...' : 'Syntaxis: Analizando...' }, async () => {
+          if (cancelToken.isCancellationRequested) { return; }
+          if (mode === 'ai') {
+            const { valid, reason } = await _settingsManager!.validateAIConfig();
+            if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+            if (cancelToken.isCancellationRequested) { return; }
+            try {
+              const fileType = ed.document.languageId as any;
+              const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
+              if (cancelToken.isCancellationRequested) { return; }
+              const report = aiResultToReport(result, ed.document.fileName, { code: ed.document.getText() });
+              const aiFindings = report.agentReports.flatMap(a => a.findings);
+              _aiFindings.set(ed.document.uri.toString(), aiFindings);
+              _codeLensProvider?.fire();
+              // Aplicar diagnostics directamente — sin llamar refreshDiagnostics (evita doble request al LLM)
+              applyAIDiagnostics(ed.document, aiFindings);
+              printReport(report);
+              notify(report);
+            } catch (err: any) {
+              vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
+            }
+          } else {
+            const report = analyzeCode(ed.document.getText(), ed.document.fileName);
+            refreshDiagnostics(ed.document);
             printReport(report);
             notify(report);
-          } catch (err: any) {
-            vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
           }
-        } else {
-          const report = analyzeCode(ed.document.getText(), ed.document.fileName);
-          refreshDiagnostics(ed.document);
-          printReport(report);
-          notify(report);
-        }
-      });
+        });
+      } finally {
+        endAnalysis();
+      }
     })
   );
 
@@ -837,44 +985,58 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
       }
 
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
-        title:`Syntaxis: Analizando ${files.length} archivos${aiMode ? ' [IA]' : ''}...`, cancellable:true }, async (progress, token) => {
-        // Pre-pass: detectar filtro global de autenticación en Program.cs / Startup.cs
-        let globalAuthFilter = false;
-        for (const f of files) {
-          const bn = path.basename(f.fsPath).toLowerCase();
-          if (bn === 'program.cs' || bn === 'startup.cs') {
-            try {
-              const doc = await vscode.workspace.openTextDocument(f);
-              if (/options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(doc.getText())) {
-                globalAuthFilter = true; break;
-              }
-            } catch { /* skip */ }
-          }
-        }
-        let crit=0, hi=0;
-        for (let i=0; i<files.length; i++) {
-          if (token.isCancellationRequested) { break; }
-          progress.report({ increment:100/files.length, message:`${path.basename(files[i].fsPath)}${aiMode ? ' [IA]' : ''}` });
-          try {
-            const doc = await vscode.workspace.openTextDocument(files[i]);
-            if (aiMode) {
-              const fileType = doc.languageId as any;
-              const result = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
-              const r = aiResultToReport(result, files[i].fsPath, { code: doc.getText() });
-              const findings = r.agentReports.flatMap(a => a.findings);
-              _aiFindings.set(doc.uri.toString(), findings);
-              applyAIDiagnostics(doc, findings);
-              crit += r.criticalFindings; hi += r.highFindings;
-            } else {
-              const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
-              refreshDiagnostics(doc); crit+=r.criticalFindings; hi+=r.highFindings;
+      const cancelToken = beginAnalysis();
+      try {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification,
+          title:`Syntaxis: Analizando ${files.length} archivos${aiMode ? ' [IA]' : ''}...`, cancellable:true }, async (progress, token) => {
+          const isCancelled = () => token.isCancellationRequested || cancelToken.isCancellationRequested;
+          // Pre-pass: detectar filtro global de autenticación en Program.cs / Startup.cs
+          let globalAuthFilter = false;
+          for (const f of files) {
+            const bn = path.basename(f.fsPath).toLowerCase();
+            if (bn === 'program.cs' || bn === 'startup.cs') {
+              try {
+                const doc = await vscode.workspace.openTextDocument(f);
+                if (/options\.Filters\.Add|Filters\.Add[<(][^)>]*[Aa]uthor[io]z|AuthorizationActionFilter/.test(doc.getText())) {
+                  globalAuthFilter = true; break;
+                }
+              } catch { /* skip */ }
             }
-          } catch { /* skip unreadable files */ }
-        }
-        const icon = crit>0?'❌':hi>0?'⚠️':'✅';
-        vscode.window.showInformationMessage(`${icon} ${files.length} archivos${aiMode ? ' [IA]' : ''}: ${crit} CRÍTICA, ${hi} ALTA`);
-      });
+          }
+          let crit=0, hi=0, processed=0;
+          for (let i=0; i<files.length; i++) {
+            if (isCancelled()) { break; }
+            progress.report({ increment:100/files.length, message:`${path.basename(files[i].fsPath)}${aiMode ? ' [IA]' : ''}` });
+            try {
+              const doc = await vscode.workspace.openTextDocument(files[i]);
+              if (isCancelled()) { break; }
+              if (aiMode) {
+                const fileType = doc.languageId as any;
+                const result = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
+                if (isCancelled()) { break; }
+                const r = aiResultToReport(result, files[i].fsPath, { code: doc.getText() });
+                const findings = r.agentReports.flatMap(a => a.findings);
+                _aiFindings.set(doc.uri.toString(), findings);
+                _codeLensProvider?.fire();
+                applyAIDiagnostics(doc, findings);
+                crit += r.criticalFindings; hi += r.highFindings;
+              } else {
+                const r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
+                refreshDiagnostics(doc); crit+=r.criticalFindings; hi+=r.highFindings;
+              }
+              processed++;
+            } catch { /* skip unreadable files */ }
+          }
+          if (isCancelled()) {
+            vscode.window.showWarningMessage(`⏹ Análisis detenido — ${processed}/${files.length} archivos procesados. Los diagnósticos mostrados son parciales.`);
+          } else {
+            const icon = crit>0?'❌':hi>0?'⚠️':'✅';
+            vscode.window.showInformationMessage(`${icon} ${files.length} archivos${aiMode ? ' [IA]' : ''}: ${crit} CRÍTICA, ${hi} ALTA`);
+          }
+        });
+      } finally {
+        endAnalysis();
+      }
     })
   );
 
@@ -909,35 +1071,42 @@ export function activate(context: vscode.ExtensionContext): void {
       const generatedBy = getGeneratedBy();
 
       let savedPathsOuter: string[] = [];
+      let reportWasAborted = false;
 
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: false },
-        async (progress) => {
-          let consolidatedReport: Report | undefined;
-          const aiMode = _settingsManager?.getAnalysisMode() === 'ai';
+      const cancelToken = beginAnalysis();
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Syntaxis: Generando reporte...', cancellable: true },
+          async (progress, token) => {
+            const isCancelled = () => token.isCancellationRequested || cancelToken.isCancellationRequested;
+            let consolidatedReport: Report | undefined;
+            const aiMode = _settingsManager?.getAnalysisMode() === 'ai';
 
-          // ── Recopilar datos ────────────────────────────────────────────────
-          if (choice === '📄 Archivo actual') {
-            const ed = vscode.window.activeTextEditor;
-            if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
+            // ── Recopilar datos ────────────────────────────────────────────────
+            if (choice === '📄 Archivo actual') {
+              const ed = vscode.window.activeTextEditor;
+              if (!ed) { vscode.window.showWarningMessage('Syntaxis: Abre un archivo primero.'); return; }
 
-            if (aiMode) {
-              const { valid, reason } = await _settingsManager!.validateAIConfig();
-              if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
-              progress.report({ message: 'Analizando con IA...' });
-              try {
-                const fileType = ed.document.languageId as any;
-                const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
-                consolidatedReport = aiResultToReport(result, ed.document.fileName, { generatedBy: `${generatedBy} [IA]`, code: ed.document.getText() });
-                _aiFindings.set(ed.document.uri.toString(), consolidatedReport.agentReports.flatMap(a => a.findings));
-              } catch (err: any) {
-                vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
-                return;
+              if (aiMode) {
+                const { valid, reason } = await _settingsManager!.validateAIConfig();
+                if (!valid) { vscode.window.showWarningMessage(`Syntaxis IA: ${reason}`); return; }
+                progress.report({ message: 'Analizando con IA...' });
+                if (isCancelled()) { return; }
+                try {
+                  const fileType = ed.document.languageId as any;
+                  const result = await analyzeWithAI(ed.document.getText(), ed.document.fileName, fileType, _settingsManager!);
+                  if (isCancelled()) { return; }
+                  consolidatedReport = aiResultToReport(result, ed.document.fileName, { generatedBy: `${generatedBy} [IA]`, code: ed.document.getText() });
+                  _aiFindings.set(ed.document.uri.toString(), consolidatedReport.agentReports.flatMap(a => a.findings));
+                  _codeLensProvider?.fire();
+                } catch (err: any) {
+                  vscode.window.showErrorMessage(`Syntaxis IA: ${err?.message ?? 'Error al analizar con IA'}`);
+                  return;
+                }
+              } else {
+                consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName, { generatedBy });
               }
             } else {
-              consolidatedReport = analyzeCode(ed.document.getText(), ed.document.fileName, { generatedBy });
-            }
-          } else {
             // Workspace: analizar todos los archivos
             progress.report({ message: 'Buscando archivos...' });
             const files = await vscode.workspace.findFiles(
@@ -972,13 +1141,16 @@ export function activate(context: vscode.ExtensionContext): void {
             const allFiles: string[] = [];
 
             for (let i = 0; i < files.length; i++) {
+              if (isCancelled()) { break; }
               progress.report({ message: `${i + 1}/${files.length}: ${path.basename(files[i].fsPath)}${aiMode ? ' [IA]' : ''}` });
               try {
                 const doc = await vscode.workspace.openTextDocument(files[i]);
+                if (isCancelled()) { break; }
                 let r: Report;
                 if (aiMode) {
                   const fileType = doc.languageId as any;
                   const aiResult = await analyzeWithAI(doc.getText(), files[i].fsPath, fileType, _settingsManager!);
+                  if (isCancelled()) { break; }
                   r = aiResultToReport(aiResult, files[i].fsPath, { generatedBy: `${generatedBy} [IA]`, code: doc.getText() });
                 } else {
                   r = analyzeCode(doc.getText(), files[i].fsPath, { globalAuthFilter });
@@ -1001,6 +1173,8 @@ export function activate(context: vscode.ExtensionContext): void {
               } catch { /* skip unreadable files */ }
             }
 
+            const wasAborted = isCancelled();
+
             const ws: Status = totalCrit > 0 ? 'FAIL' : totalHigh > 0 ? 'WARN' : 'PASS';
             const wsCritPenalty  = Math.min(totalCrit  * 20, 60);
             const wsHighPenalty  = Math.min(totalHigh  *  8, 20);
@@ -1022,52 +1196,65 @@ export function activate(context: vscode.ExtensionContext): void {
               blockMerge: totalCrit > 0,
               recommendations: [],
               generatedBy: aiMode ? `${generatedBy} [IA]` : generatedBy,
+              analysisMode: aiMode ? 'ai' : 'static',
               passingChecks: allPassingChecks,
               agentReports: allAgentReports,
+              wasAborted,
             };
+
+            if (wasAborted) {
+              vscode.window.showWarningMessage(`⏹ Análisis detenido — ${allFiles.length}/${files.length} archivos procesados. Se generará un reporte parcial.`);
+            }
           }
 
-          if (!consolidatedReport) { return; }
-          const allFindings = consolidatedReport.agentReports
-            .flatMap(a => a.findings)
-            .sort((a,b) => {
-              const o: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
-              return (o[a.severity]??9) - (o[b.severity]??9);
-            });
-          const savedPaths: string[] = [];
+            if (!consolidatedReport) { return; }
+            const allFindings = consolidatedReport.agentReports
+              .flatMap(a => a.findings)
+              .sort((a,b) => {
+                const o: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
+                return (o[a.severity]??9) - (o[b.severity]??9);
+              });
+            const savedPaths: string[] = [];
 
-          // ── Escribir archivos según formato ───────────────────────────────
-          const writeJSON = format === 'JSON' || format.includes('Todos');
-          const writeHTML = format === 'HTML' || format.includes('Todos');
-          const writeMD   = format === 'Markdown' || format.includes('Todos');
+            // ── Escribir archivos según formato ───────────────────────────────
+            const writeJSON = format === 'JSON' || format.includes('Todos');
+            const writeHTML = format === 'HTML' || format.includes('Todos');
+            const writeMD   = format === 'Markdown' || format.includes('Todos');
+            const df = getDisplayFilter();
+            const abortedSuffix = consolidatedReport.wasAborted ? '-parcial' : '';
 
-          if (writeJSON) {
-            const p = path.join(reportsDir, `compliance-${ts}.json`);
-            fs.writeFileSync(p, JSON.stringify(consolidatedReport, null, 2), 'utf8');
-            savedPaths.push(p);
+            if (writeJSON) {
+              const p = path.join(reportsDir, `compliance-${ts}${abortedSuffix}.json`);
+              fs.writeFileSync(p, JSON.stringify(consolidatedReport, null, 2), 'utf8');
+              savedPaths.push(p);
+            }
+
+            if (writeHTML) {
+              const p = path.join(reportsDir, `compliance-${ts}${abortedSuffix}.html`);
+              fs.writeFileSync(p, buildHtmlReport(consolidatedReport, allFindings, df), 'utf8');
+              savedPaths.push(p);
+            }
+
+            if (writeMD) {
+              const p = path.join(reportsDir, `compliance-${ts}${abortedSuffix}.md`);
+              fs.writeFileSync(p, buildMarkdownReport(consolidatedReport, allFindings, df), 'utf8');
+              savedPaths.push(p);
+            }
+
+            savedPathsOuter = savedPaths;
+            reportWasAborted = consolidatedReport.wasAborted ?? false;
           }
-
-          if (writeHTML) {
-            const p = path.join(reportsDir, `compliance-${ts}.html`);
-            fs.writeFileSync(p, buildHtmlReport(consolidatedReport, allFindings), 'utf8');
-            savedPaths.push(p);
-          }
-
-          if (writeMD) {
-            const p = path.join(reportsDir, `compliance-${ts}.md`);
-            fs.writeFileSync(p, buildMarkdownReport(consolidatedReport, allFindings), 'utf8');
-            savedPaths.push(p);
-          }
-
-          savedPathsOuter = savedPaths;
-        }
-      );
+        );
+      } finally {
+        endAnalysis();
+      }
 
       // ── Notificar y ofrecer abrir (fuera del withProgress para que se cierre) ──
       if (savedPathsOuter.length) {
         const fileNames = savedPathsOuter.map(p => path.basename(p)).join(', ');
+        const prefix = reportWasAborted ? '⏹ Reporte parcial' : `📊 Reporte${savedPathsOuter.length > 1 ? 's' : ''} generado${savedPathsOuter.length > 1 ? 's' : ''}`;
         const action = await vscode.window.showInformationMessage(
-          `📊 Reporte${savedPathsOuter.length > 1 ? 's' : ''} generado${savedPathsOuter.length > 1 ? 's' : ''}: ${fileNames}`,
+          `${prefix}: ${fileNames}`,
           'Abrir HTML', 'Abrir JSON', 'Abrir carpeta'
         );
         if (action === 'Abrir HTML') {
@@ -1260,6 +1447,11 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  _analysisCancelTokenSource?.cancel();
+  _analysisCancelTokenSource?.dispose();
+  _analysisCancelTokenSource = undefined;
+  _stopAnalysisButton?.dispose();
+  _stopAnalysisButton = undefined;
   diagnosticCollection?.dispose();
   diagnosticCollection = undefined;
   _settingsManager = undefined;
@@ -1273,14 +1465,21 @@ function printReport(report: Report): void {
   out.appendLine('═══════════════════════════════════════════════════');
   out.appendLine(`  SYNTAXIS COMPLIANCE — ${report.analyzedAt}`);
   out.appendLine('═══════════════════════════════════════════════════');
+  if (report.wasAborted) {
+    out.appendLine('  ⏹ ANÁLISIS DETENIDO POR EL USUARIO — REPORTE PARCIAL');
+    out.appendLine(`     Archivos analizados: ${report.filesAnalyzed?.length ?? '?'}`);
+    out.appendLine('───────────────────────────────────────────────────');
+  }
   out.appendLine(`  Archivo : ${path.basename(report.projectName)}`);
   out.appendLine(`  Estado  : ${report.overallStatus}   Score: ${report.overallScore}/100`);
   out.appendLine(`  🔴 CRÍTICA: ${report.criticalFindings}  🟠 ALTA: ${report.highFindings}  🟡 MEDIA: ${report.mediumFindings??0}  🔵 BAJA: ${report.lowFindings??0}  Total: ${report.totalFindings}`);
   out.appendLine('───────────────────────────────────────────────────');
+  const df = getDisplayFilter();
   for (const ar of report.agentReports) {
-    if (!ar.findings.length) { continue; }
+    const visibleFindings = filterFindings(ar.findings, df);
+    if (!visibleFindings.length) { continue; }
     out.appendLine(`\n  ▶ ${ar.agentName}`);
-    for (const f of ar.findings) {
+    for (const f of visibleFindings) {
       const ico = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
       out.appendLine(`  ${ico} [${f.severity}] L${f.lineNumber??'?'} — ${f.description}`);
       out.appendLine(`       📋 ${f.article??f.type}`);
@@ -1307,15 +1506,27 @@ function notify(r: Report): void {
   else { vscode.window.showInformationMessage(msg); }
 }
 
-export function buildMarkdownReport(report: Report, allFindings: Finding[]): string {
+export function buildMarkdownReport(report: Report, allFindings: Finding[], filter?: DisplayFilter): string {
+  const df = filter ?? SHOW_ALL;
   const statusLine = report.overallStatus==='FAIL' ? '## ❌ Estado: MERGE BLOQUEADO'
     : report.overallStatus==='WARN' ? '## ⚠️ Estado: REQUIERE REVISIÓN' : '## ✅ Estado: APROBADO';
-  const totalHours = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
   const icons: Record<Severity,'🔴'|'🟠'|'🟡'|'🔵'> = { 'CRÍTICA':'🔴','ALTA':'🟠','MEDIA':'🟡','BAJA':'🔵' };
   const sevOrder: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
-  const sorted = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
+  const visibleFindings = filterFindings([...allFindings], df).sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
+  const totalHours = visibleFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
 
-  const rows = sorted.map(f => {
+  // Nota de filtros activos
+  const activeFilters: string[] = [];
+  if (!df.showCritical) { activeFilters.push('sin 🔴 CRÍTICA'); }
+  if (!df.showHigh)     { activeFilters.push('sin 🟠 ALTA'); }
+  if (!df.showMedium)   { activeFilters.push('sin 🟡 MEDIA'); }
+  if (!df.showLow)      { activeFilters.push('sin 🔵 BAJA'); }
+  if (!df.showResolved) { activeFilters.push('sin ✅ Resueltos'); }
+  const filterNote = activeFilters.length > 0
+    ? `> ⚙️ **Filtros activos (Syntaxis › Display settings):** ${activeFilters.join(', ')}\n\n`
+    : '';
+
+  const rows = visibleFindings.map(f => {
     const fileName = f.file?.split(/[\\/]/).pop() ?? '?';
     const vscodePath = f.file && f.lineNumber
       ? `vscode://file/${f.file.replace(/\\/g,'/')}:${f.lineNumber}:1`
@@ -1328,15 +1539,11 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     const citationBlock = f.citation
       ? `<details><summary>📜 Ver cita textual de la ley</summary>\n\n**${f.citation.law}**  \n**${f.citation.article}** — *${f.citation.title}*\n\n> ${f.citation.text.replace(/\n/g,'\n> ')}\n\n${f.citation.url ? `[📖 Texto completo en BCN](${f.citation.url})` : ''}\n\n**❓ ¿Por qué debería implementar esta corrección?**\n\n${f.citation.whyFix.replace(/\n/g,'\n')}\n</details>`
       : '';
-    const mdPrompt = f.suggestedPrompt ?? buildSuggestedPrompt(f);
-    const mdPromptLabel = f.suggestedPrompt
-      ? '🤖 Prompt sugerido para corregir con IA (generado por IA)'
-      : '🤖 Prompt sugerido para corregir con IA';
-    const promptBlock = `<details><summary>${mdPromptLabel}</summary>\n\n\`\`\`\n${mdPrompt}\n\`\`\`\n</details>`;
-    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}\n${promptBlock}`;
+    return `| ${icons[f.severity]} ${f.severity} | ${loc} | ${desc} | ${f.article??f.type} | ${rec} |\n${citationBlock}`;
   }).join('\n');
 
-  const passingRows = report.passingChecks.map(p => {
+  const passingChecksToShow = df.showResolved ? report.passingChecks : [];
+  const passingRows = passingChecksToShow.map(p => {
     const pFileName = p.file?.split(/[\\/]/).pop() ?? '?';
     const pVscodePath = p.file && p.lineNumber
       ? `vscode://file/${p.file.replace(/\\/g,'/')}:${p.lineNumber}:1`
@@ -1351,7 +1558,10 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
   }).join('\n');
 
   const modeBadge = report.analysisMode === 'ai' ? '> 🤖 **Modo: Análisis con IA**\n\n' : '> 🔎 **Modo: Análisis Estático**\n\n';
-  return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n${modeBadge}` +
+  const abortedNote = report.wasAborted
+    ? `> ⏹ **⚠️ ANÁLISIS DETENIDO POR EL USUARIO — REPORTE PARCIAL.** Solo se incluyen los ${report.filesAnalyzed?.length ?? 0} archivos analizados antes de la detención. Los hallazgos mostrados son incompletos.\n\n`
+    : '';
+  return `# 🔍 Syntaxis Compliance Report\n\n${statusLine}\n\n${modeBadge}${abortedNote}${filterNote}` +
     `**Proyecto:** \`${report.projectName}\`  **Analizado:** ${report.analyzedAt}` +
     (report.generatedBy ? `  **Generado por:** ${report.generatedBy}` : '') + `\n\n---\n\n` +
     `| Métrica | Valor |\n|---|---|\n` +
@@ -1364,13 +1574,15 @@ export function buildMarkdownReport(report: Report, allFindings: Finding[]): str
     `| ✅ Controles OK | ${report.passingChecks.length} |\n` +
     `| Horas fix | ~${totalHours}h |\n\n` +
     `## 📊 Hallazgos\n\n` +
-    (allFindings.length
+    (visibleFindings.length
       ? `| Severidad | Ubicación | Descripción | Artículo | Recomendación |\n|---|---|---|---|---|\n${rows}\n`
-      : `✅ Sin hallazgos.\n`) +
-    `\n## ✅ Controles que cumplen\n\n` +
-    (report.passingChecks.length
-      ? `| Control | Ubicación | Descripción | Artículo |\n|---|---|---|---|\n${passingRows}\n`
-      : `_No se detectaron controles de cumplimiento en este análisis._\n`) +
+      : `✅ Sin hallazgos${activeFilters.length ? ' (con filtros activos)' : ''}.\n`) +
+    (df.showResolved
+      ? `\n## ✅ Controles que cumplen\n\n` +
+        (passingChecksToShow.length
+          ? `| Control | Ubicación | Descripción | Artículo |\n|---|---|---|---|\n${passingRows}\n`
+          : `_No se detectaron controles de cumplimiento en este análisis._\n`)
+      : '') +
     `\n---\n> **Ley 21.719** (Protección de Datos Personales — vigente diciembre 2026) · **Ley 21.663** (Marco de Ciberseguridad) · Syntaxis Compliance Checker\n`;
 }
 
@@ -1398,17 +1610,37 @@ Por favor:
 // ─── Exportar generateHtml inline (no requiere importar src/) ────────────────
 // Esta función es una versión simplificada del generador HTML completo
 // La versión completa vive en src/report-generators/html-report.ts
-export function buildHtmlReport(report: Report, allFindings: Finding[]): string {
+export function buildHtmlReport(report: Report, allFindings: Finding[], filter?: DisplayFilter): string {
+  const df = filter ?? SHOW_ALL;
+  const visibleFindings = filterFindings([...allFindings], df)
+    .sort((a,b)=>({ 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 }[a.severity]??9) - ({ 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 }[b.severity]??9));
+
   const statusColor = report.overallStatus==='FAIL'?'#dc2626':report.overallStatus==='WARN'?'#ea580c':'#16a34a';
   const statusLabel = report.overallStatus==='FAIL'?'❌ MERGE BLOQUEADO':report.overallStatus==='WARN'?'⚠️ REQUIERE REVISIÓN':'✅ APROBADO';
-  const totalHours  = allFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
+  const totalHours  = visibleFindings.reduce((s,f)=>s+(f.estimatedFixHours??0),0);
   const esc = (s:string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const sevOrder: Record<string,number> = { 'CRÍTICA':0,'ALTA':1,'MEDIA':2,'BAJA':3 };
-  const sortedFindings = [...allFindings].sort((a,b)=>(sevOrder[a.severity]??9)-(sevOrder[b.severity]??9));
+
+  // Aviso de filtros activos
+  const activeFilters: string[] = [];
+  if (!df.showCritical) { activeFilters.push('🔴 CRÍTICA'); }
+  if (!df.showHigh)     { activeFilters.push('🟠 ALTA'); }
+  if (!df.showMedium)   { activeFilters.push('🟡 MEDIA'); }
+  if (!df.showLow)      { activeFilters.push('🔵 BAJA'); }
+  if (!df.showResolved) { activeFilters.push('✅ Resueltos'); }
+  const filterBanner = activeFilters.length > 0
+    ? `<div style="margin-bottom:1rem;padding:.6rem 1rem;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:6px;font-size:.82rem;color:#92400e">⚙️ <strong>Filtros activos (Syntaxis › Display):</strong> ocultando ${activeFilters.join(', ')}</div>`
+    : '';
+
+  const abortedBanner = report.wasAborted
+    ? `<div style="margin-bottom:1.2rem;padding:.8rem 1.2rem;background:#fef2f2;border-left:4px solid #ef4444;border-radius:8px;font-size:.85rem;color:#991b1b">
+        <strong>⏹ ANÁLISIS DETENIDO POR EL USUARIO — REPORTE PARCIAL</strong><br>
+        <span style="font-size:.8rem">Solo se muestran los resultados de los <strong>${report.filesAnalyzed?.length ?? 0} archivos</strong> analizados antes de la detención. Los hallazgos mostrados son incompletos y no deben usarse como referencia de cumplimiento total del proyecto.</span>
+       </div>`
+    : '';
 
   const sevAnchorIds: Record<string,string> = { 'CRÍTICA':'hallazgos-critica','ALTA':'hallazgos-alta','MEDIA':'hallazgos-media','BAJA':'hallazgos-baja' };
   let lastSev = '';
-  const rows = sortedFindings.map(f => {
+  const rows = visibleFindings.map(f => {
     const icon = f.severity==='CRÍTICA'?'🔴':f.severity==='ALTA'?'🟠':f.severity==='MEDIA'?'🟡':'🔵';
     const bg   = f.severity==='CRÍTICA'?'#fef2f2':f.severity==='ALTA'?'#fff7ed':f.severity==='MEDIA'?'#fefce8':'#eff6ff';
     const col  = f.severity==='CRÍTICA'?'#dc2626':f.severity==='ALTA'?'#ea580c':f.severity==='MEDIA'?'#ca8a04':'#2563eb';
@@ -1443,26 +1675,6 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
           </details>
         </td>
       </tr>` : '';
-    // Usar prompt generado por IA si existe; de lo contrario generar estáticamente
-    const prompt = f.suggestedPrompt ?? buildSuggestedPrompt(f);
-    const promptLabel = f.suggestedPrompt
-      ? '🤖 Prompt sugerido para corregir con IA <span style="color:#64748b;font-weight:400;font-size:.75rem">(generado por IA)</span>'
-      : '🤖 Prompt sugerido para corregir con IA';
-    const promptHtml = `
-      <tr style="background:${bg}">
-        <td colspan="7" style="padding:.3rem .6rem .9rem 2rem;border-top:none">
-          <details style="cursor:pointer">
-            <summary style="color:#0891b2;font-size:.8rem;font-weight:600;user-select:none">${promptLabel}</summary>
-            <div style="margin-top:.6rem">
-              <pre id="prompt-${f.id}" style="background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:6px;font-size:.76rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;font-family:monospace">${esc(prompt)}</pre>
-              <button onclick="(function(btn){var pre=document.getElementById('prompt-${f.id}');navigator.clipboard.writeText(pre.textContent).then(function(){var t=btn.textContent;btn.textContent='✅ ¡Copiado!';btn.style.background='#16a34a';setTimeout(function(){btn.textContent=t;btn.style.background='';},2000);})})(this)"
-                style="margin-top:.5rem;padding:.35rem .9rem;background:#0891b2;color:#fff;border:none;border-radius:5px;font-size:.78rem;font-weight:600;cursor:pointer">
-                📋 Copiar prompt
-              </button>
-            </div>
-          </details>
-        </td>
-      </tr>`;
     return `${anchorRow}<tr style="background:${bg}">
       <td style="text-align:center">${icon}</td>
       <td><b style="color:${col}">${f.severity}</b></td>
@@ -1471,10 +1683,11 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
       <td style="color:#64748b;font-size:.82em">${esc(f.law)}<br><em>${esc(f.article??f.type)}</em></td>
       <td style="font-size:.82em">${esc(f.recommendation.substring(0,80))}</td>
       <td style="text-align:center">${f.estimatedFixHours??'—'}h</td>
-    </tr>${citationHtml}${promptHtml}`;
+    </tr>${citationHtml}`;
   }).join('');
 
-  const passingRows = report.passingChecks.map(p => {
+  const passingChecksToShow = df.showResolved ? report.passingChecks : [];
+  const passingRows = passingChecksToShow.map(p => {
     const pFileName = p.file?.split(/[\\/]/).pop() ?? '?';
     const pVscodePath = p.file && p.lineNumber
       ? `vscode://file/${p.file.replace(/\\/g,'/')}:${p.lineNumber}:1`
@@ -1511,6 +1724,12 @@ export function buildHtmlReport(report: Report, allFindings: Finding[]): string 
       <td style="font-size:.82em;color:#475569">${esc(p.evidence.substring(0,80))}</td>
     </tr>${citationHtml}`;
   }).join('');
+
+  const resolvedSection = df.showResolved ? `
+<h2 id="controles">✅ Controles que cumplen</h2>
+<table class="passing-table"><thead><tr>
+  <th></th><th>Control</th><th>Ubicación</th><th>Descripción</th><th>Artículo</th><th>Evidencia</th>
+</tr></thead><tbody>${passingRows||`<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#64748b">No se detectaron controles en este análisis</td></tr>`}</tbody></table>` : '';
 
   return `<!DOCTYPE html><html lang="es">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1550,6 +1769,7 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
   <span class="badge">${statusLabel}</span>
   ${report.analysisMode === 'ai' ? '<span style="display:inline-block;padding:.3rem .9rem;border-radius:999px;background:#7c3aed;color:#fff;font-weight:700;font-size:.85rem;margin-left:.5rem">🤖 Análisis con IA</span>' : '<span style="display:inline-block;padding:.3rem .9rem;border-radius:999px;background:#475569;color:#fff;font-weight:700;font-size:.85rem;margin-left:.5rem">🔎 Análisis Estático</span>'}
 </div>
+${abortedBanner}${filterBanner}
 <div class="cards">
   <div class="card">
     <div class="v score-wrap" style="color:${report.overallScore>=70?'#16a34a':report.overallScore>=40?'#ea580c':'#dc2626'}">
@@ -1580,11 +1800,8 @@ footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
 <h2 id="hallazgos">📊 Hallazgos detallados</h2>
 <table><thead><tr>
   <th></th><th>Severidad</th><th>Ubicación</th><th>Descripción</th><th>Ley / Art.</th><th>Recomendación</th><th>Fix</th>
-</tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados</td></tr>`}</tbody></table>
-<h2 id="controles">✅ Controles que cumplen</h2>
-<table class="passing-table"><thead><tr>
-  <th></th><th>Control</th><th>Ubicación</th><th>Descripción</th><th>Artículo</th><th>Evidencia</th>
-</tr></thead><tbody>${passingRows||`<tr><td colspan="6" style="text-align:center;padding:1.5rem;color:#64748b">No se detectaron controles en este análisis</td></tr>`}</tbody></table>
+</tr></thead><tbody>${rows||`<tr><td colspan="7" style="text-align:center;padding:2rem;color:#16a34a">✅ Sin problemas detectados${activeFilters.length?' (con filtros activos)':''}</td></tr>`}</tbody></table>
+${resolvedSection}
 <footer>
   ${_logoBase64 ? `<img src="data:image/png;base64,${_logoBase64}" alt="Syntaxis" style="height:24px;width:24px;vertical-align:middle;border-radius:4px;margin-right:.4rem">` : ''}
   <a href="https://www.syntaxis.cl" style="color:#6366f1;text-decoration:none;font-weight:600">Syntaxis Spa</a> · Compliance Checker · Ley 21.719 (vigente dic. 2026) + Ley 21.663 · ${report.analyzedAt}${report.generatedBy ? ` · 👤 ${esc(report.generatedBy)}` : ''}
